@@ -21,7 +21,18 @@ from .store import Store
 from .rules import utcnow as rules_utcnow
 
 
+def _utf8_console():
+    """Windows consoles may use cp1252/cp852 – never crash on band arrows or call signs."""
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
 def check_cabrillo(path: str, profile_key: str = None) -> int:
+    _utf8_console()
     log = cabrillo.read(path)
     key = profile_key or cabrillo.guess_profile_key(log)
     prof = rules.PROFILES.get(key or "")
@@ -50,6 +61,7 @@ def check_cabrillo(path: str, profile_key: str = None) -> int:
 
 def check_db(path: str, contest_nr=None, profile_key=None, m2_source=None, list_only=False,
              all_qsos=False) -> int:
+    _utf8_console()
     from . import n1mmdb
     from .core import Settings
     db = n1mmdb.connect(path)
@@ -80,6 +92,7 @@ def check_db(path: str, contest_nr=None, profile_key=None, m2_source=None, list_
 
 
 def console(cp) -> int:
+    _utf8_console()
     store = Store(os.path.join(config.app_dir(), "timer.db"))
     w = Watcher(store, config.settings(cp))
     lst = UdpListener(cp.getint("udp", "port"), w.handle_packet, cp.get("udp", "bind"))
@@ -114,16 +127,6 @@ def console(cp) -> int:
     except KeyboardInterrupt:
         lst.stop()
     return 0
-
-
-def _utf8_console():
-    """Windows consoles may use cp1252/cp852 – never crash on band arrows or call signs."""
-    for stream in (sys.stdout, sys.stderr):
-        if stream is not None and hasattr(stream, "reconfigure"):
-            try:
-                stream.reconfigure(encoding="utf-8", errors="replace")
-            except (ValueError, OSError):
-                pass
 
 
 def main(argv=None) -> int:
