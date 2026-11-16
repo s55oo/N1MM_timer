@@ -55,9 +55,22 @@ class TestTenMinute(unittest.TestCase):
         r = evaluate(self.P, [q(1, 0, "40"), q(2, 1, "40", MULT, True)])
         self.assertIn(rules.MULT_SAME_BAND, kinds(r))
 
-    def test_mult_not_new(self):
+    def test_mult_flag_not_used(self):
+        # N1MM databases store no multiplier flags (all 0) – never a fault on its own
         r = evaluate(self.P, [q(1, 0, "40"), q(2, 1, "20", MULT, False)])
-        self.assertEqual(kinds(r), [rules.MULT_NOT_NEW])
+        self.assertEqual(r.faults, [])
+
+    def test_judged_in_whole_minutes_like_cq_checker(self):
+        # first QSO 12:00:30, change 12:10:05 -> legal (1200 -> 1210 in Cabrillo)
+        r = evaluate(self.P, [q(1, 0, "40", seconds=30), q(2, 10, "20", seconds=5)])
+        self.assertEqual(r.faults, [])
+        # first QSO 12:00:30, change 12:09:59 -> breach (1209)
+        r = evaluate(self.P, [q(1, 0, "40", seconds=30), q(2, 9, "20", seconds=59)])
+        self.assertEqual(kinds(r), [rules.TEN_MIN])
+
+    def test_live_countdown_stays_exact_seconds(self):
+        r = evaluate(self.P, [q(1, 0, "40", seconds=30)], now=T0 + timedelta(minutes=10, seconds=5))
+        self.assertFalse(r.status[RUN].can_change(T0 + timedelta(minutes=10, seconds=5)))
 
     def test_mult_unknown_mult_flag_not_reported(self):
         r = evaluate(self.P, [q(1, 0, "40"), q(2, 1, "20", MULT, None)])

@@ -11,13 +11,15 @@ from n1mm_timer.store import Store
 
 
 def contact(cid, ts, band, call, station="RUN-PC", is_run="True", mult="1", tag="contactinfo",
-            contest="CQWWCW", radionr="1"):
+            contest="CQWWCW", radionr="1", run1run2=None):
+    if run1run2 is None:                    # MULT QSOs in these tests come from the MULT signal
+        run1run2 = "2" if is_run == "False" else "1"
     return f"""<?xml version="1.0" encoding="utf-8"?>
 <{tag}>
   <app>N1MM</app><contestname>{contest}</contestname><contestnr>12</contestnr>
   <timestamp>{ts}</timestamp><mycall>S50A</mycall><band>{band}</band>
   <rxfreq>702500</rxfreq><txfreq>702500</txfreq><operator>S55OO</operator><mode>CW</mode>
-  <call>{call}</call><radionr>{radionr}</radionr><run1run2>1</run1run2>
+  <call>{call}</call><radionr>{radionr}</radionr><run1run2>{run1run2}</run1run2>
   <ismultiplier1>{mult}</ismultiplier1><ismultiplier2>0</ismultiplier2><ismultiplier3>0</ismultiplier3>
   <IsRunQSO>{is_run}</IsRunQSO><StationName>{station}</StationName>
   <ID>{cid}</ID><IsOriginal>True</IsOriginal>
@@ -115,7 +117,7 @@ class TestWatcher(unittest.TestCase):
 
     def test_m2_by_station(self):
         st = Store(os.path.join(self.tmp, "m2.db"))
-        w = Watcher(st, Settings(category="M2", m2_signal_source="station"))
+        w = Watcher(st, Settings(category="M2", signal_source="station"))
         for i in range(10):
             w.handle_packet(contact(f"a{i}", f"2026-11-28 12:{i:02d}:00", "7" if i % 2 else "14", f"X{i}",
                                     station="PC1"))
@@ -196,6 +198,32 @@ def radio_full(station, freq_10hz, radionr="1", running="True", tx="False", op="
 <FunctionKeyCaption>{caption}</FunctionKeyCaption></RadioInfo>""".encode()
 
 
+class TestSignalIdentity(unittest.TestCase):
+    def test_ms_run_station_doing_sp_stays_run(self):
+        # IsRunQSO=False (S&P) but Run1Run2=1 -> still the RUN signal
+        w = Watcher(Store(":memory:"), Settings(category="MS"))
+        w.handle_packet(contact("g1", "2026-11-28 12:00:00", "7", "K1AR", station="PC1"))
+        w.handle_packet(contact("g2", "2026-11-28 12:01:00", "7", "W1AW", station="PC1", is_run="False",
+                                run1run2="1"))
+        snap = w.snapshot(datetime(2026, 11, 28, 12, 2))
+        self.assertEqual(set(snap.result.status), {"RUN"})
+        self.assertEqual(snap.faults, [])
+
+    def test_signal_map_overrides_per_pc(self):
+        w = Watcher(Store(":memory:"), Settings(category="MS", signal_map={"MULT2": "MULT"}))
+        w.handle_packet(contact("g1", "2026-11-28 12:00:00", "7", "K1AR", station="PC1"))
+        w.handle_packet(contact("g2", "2026-11-28 12:01:00", "14", "JA1XX", station="MULT2", run1run2="1"))
+        snap = w.snapshot(datetime(2026, 11, 28, 12, 2))
+        self.assertEqual(set(snap.result.status), {"RUN", "MULT"})
+
+    def test_early_tx_warning(self):
+        w = Watcher(Store(":memory:"), Settings(category="MS"))
+        w.handle_packet(contact("g1", "2026-11-28 12:00:00", "7", "K1AR", station="RUN-PC"))
+        w.handle_packet(radio_full("RUN-PC", 1402500, tx="True"))
+        warn = w.snapshot(datetime(2026, 11, 28, 12, 3)).warnings[0][2]
+        self.assertTrue(warn.startswith("TX on 20 m – possible early TX!"))
+
+
 class TestStations(unittest.TestCase):
     def setUp(self):
         self.w = Watcher(Store(":memory:"), Settings(category="MS"))
@@ -233,8 +261,7 @@ class TestStations(unittest.TestCase):
 
     def test_m2_radio_uses_last_qso_tx(self):
         w = Watcher(Store(":memory:"), Settings(category="M2"))   # default run1run2
-        w.handle_packet(contact("a", "2026-11-28 12:00:00", "21", "X", station="PCB", radionr="1")
-                        .replace(b"<run1run2>1</run1run2>", b"<run1run2>2</run1run2>"))
+        w.handle_packet(contact("a", "2026-11-28 12:00:00", "21", "X", station="PCB", radionr="1", run1run2="2"))
         w.handle_packet(radio_full("PCB", 2102500))
         r = [r for r in w.snapshot(datetime(2026, 11, 28, 12, 5)).stations if r.station == "PCB"][0]
         self.assertEqual(r.signal, "TX2")

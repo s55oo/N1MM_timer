@@ -88,7 +88,7 @@ class TestN1mmDb(unittest.TestCase):
         self.assertEqual(snap.profile.key, "CQWPX-SSB-M2")
         self.assertEqual([f.signal for f, _ in snap.faults], ["TX1"])
         # per-PC mapping would hide it
-        w2 = Watcher(Store(":memory:"), Settings(db_path=self.path, db_contest_nr=2, m2_signal_source="station"))
+        w2 = Watcher(Store(":memory:"), Settings(db_path=self.path, db_contest_nr=2, signal_source="station"))
         w2.sync_db()
         self.assertEqual(w2.snapshot().faults, [])
 

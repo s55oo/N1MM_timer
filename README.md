@@ -15,7 +15,7 @@ PingPong interface.
 
 | Contest | Multi-Single | Multi-Two |
 |---|---|---|
-| CQ WW CW / SSB | 10-minute rule, RUN and MULT separately. MULT on another band, new mults only | 8 band changes / clock hour per TX |
+| CQ WW CW / SSB | 10-minute rule, RUN and MULT separately (judged in whole minutes, like the CQ checker). MULT on another band | 8 band changes / clock hour per TX |
 | CQ WW RTTY | 8 band changes / clock hour, RUN and MULT separately | 8 / hour per TX |
 | CQ WPX CW / SSB / RTTY | 10 band changes / clock hour, whole entry | 8 / hour per TX |
 
@@ -52,7 +52,7 @@ Check a log (exit code 1 if faults were found):
 ```
 python run_timer.py --db "%USERPROFILE%\Documents\N1MM Logger+\Databases\CR3A_WPCSSB_2026.s3db"
 python run_timer.py --db FILE.s3db --list              # contests in the database
-python run_timer.py --db FILE.s3db --contest-nr 2 --m2-source station
+python run_timer.py --db FILE.s3db --contest-nr 2 --signal-source station
 python run_timer.py --check S50A.cbr                    # Cabrillo instead of the database
 ```
 
@@ -93,14 +93,19 @@ Passing them on to the PingPong lamps comes later (see DESIGN.md, *PingPong inte
 
 ## How signals are identified
 
-* **MS**: N1MM's Run/Mult flag (`IsRunQSO`) → RUN or MULT, the same as the
-  Cabrillo transmitter id N1MM writes (0/1).
-* **M2**: `m2_signal_source` = `run1run2` (default: N1MM's Run1/Run2 field, i.e. the
-  Cabrillo TX id; several PCs may share one TX), `station` (one PC per TX) or `radionr`.
-  In the CR3A WPX SSB 2026 log, five PCs (PCE, PC1, PCC, MULT2, PCB) logged on two TX ids,
-  so only `run1run2` counts the changes correctly.
+Default: N1MM's **Run1/Run2** field, the Cabrillo transmitter id. In Multi-Single, 1 = RUN and
+2 = MULT. In Multi-Two, 1 = TX1 and 2 = TX2. Several PCs may share one signal. N1MM's Run/S&P
+flag is **not** used, because a run station's S&P QSO is still RUN. Overrides go in
+`n1mm_timer.ini`:
 
-Check these against real N1MM packets on your network before the contest.
+```
+[contest]
+signal_source = run1run2        ; or radionr, station
+signal_map = PCE=RUN, MULT2=MULT
+```
+
+This was checked against two real 2026 logs: 9A7A CQ WW SSB Multi-Single (3 ten-minute breaches,
+0 MULT-on-RUN-band) and CR3A CQ WPX SSB Multi-Two (7 hours over 8 changes). Details are in DESIGN.md.
 
 ## Files
 

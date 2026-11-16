@@ -72,7 +72,7 @@ def check_db(path: str, contest_nr=None, profile_key=None, m2_source=None, list_
     st = Settings(profile=profile_key or "auto", db_path=path, db_contest_nr=contest_nr,
                   skip_before_start=not all_qsos)
     if m2_source:
-        st.m2_signal_source = m2_source
+        st.signal_source = m2_source
     w = Watcher(Store(":memory:"), st)
     print(w.sync_db())
     prof = w.profile()
@@ -84,7 +84,7 @@ def check_db(path: str, contest_nr=None, profile_key=None, m2_source=None, list_
     by = {}
     for q in w.qsos(prof):
         by[q.signal] = by.get(q.signal, 0) + 1
-    tx = f", M2 TX from {st.m2_signal_source}" if prof.category == "M2" else ""
+    tx = f", signal from {st.signal_source}"
     print(f"{prof.title}{tx}: {snap.qso_count} QSOs {by}, {len(snap.faults)} fault(s)")
     for f, _ in sorted(snap.faults, key=lambda x: x[0].qso.ts):
         print(f"  {f.qso.ts:%Y-%m-%d %H:%M:%S}  {f.qso.station:<8} {f.kind:<15} {f.text}")
@@ -145,7 +145,8 @@ def main(argv=None) -> int:
     ap.add_argument("--db", metavar="S3DB", help="check an N1MM Logger+ database (read-only) and exit")
     ap.add_argument("--contest-nr", type=int, help="ContestNR inside the database (default: latest)")
     ap.add_argument("--list", action="store_true", help="with --db: list contests in the database")
-    ap.add_argument("--m2-source", choices=["run1run2", "station", "radionr"], help="M2: how to tell TX1/TX2")
+    ap.add_argument("--signal-source", "--m2-source", dest="m2_source", choices=["run1run2", "radionr", "station"],
+                    help="which N1MM field gives RUN/MULT or TX1/TX2 (default run1run2)")
     ap.add_argument("--all-qsos", action="store_true", help="with --db: include QSOs outside the contest period")
     ap.add_argument("--console", action="store_true", help="run without GUI")
     ap.add_argument("--ini", help="path to n1mm_timer.ini")

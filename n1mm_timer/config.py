@@ -30,11 +30,15 @@ profile = auto
 ; MS or M2 (used with profile = auto when no N1MM database is set –
 ; with a database, N1MM's own TransmitterCategory ONE/TWO is used)
 category = MS
-; M2 only – how to tell TX1 from TX2:
-;   run1run2 = N1MM Run1/Run2 field (what N1MM writes as Cabrillo TX id; several PCs may share a TX)
-;   station  = one N1MM PC (StationName / NetBiosName) per TX
-;   radionr  = N1MM RadioNr
-m2_signal_source = run1run2
+; Which signal a QSO belongs to (MS: RUN/MULT, M2: TX1/TX2):
+;   run1run2 = N1MM's Run1/Run2 field = the Cabrillo transmitter id (MS: 1=RUN 2=MULT,
+;              M2: 1=TX1 2=TX2); several PCs may share one signal. Recommended.
+;   radionr  = N1MM RadioNr (1/2)
+;   station  = by PC name (M2: one PC per TX; MS: use signal_map)
+; N1MM's Run/S&P flag (IsRunQSO) is never used: a run station's S&P QSO is still RUN.
+signal_source = run1run2
+; optional per-PC override, StationName=SIGNAL, e.g.  PCE=RUN, MULT2=MULT  or  PC1=TX1, PC2=TX2
+signal_map =
 
 [n1mm_db]
 ; auto  = follow the log N1MM has open on THIS PC (from N1MM's Application Info packet –
@@ -106,6 +110,17 @@ def load(path: str = None) -> configparser.ConfigParser:
     return cp
 
 
+def _map(v: str) -> dict:
+    """'PCE=RUN, MULT2=MULT' -> {'PCE': 'RUN', 'MULT2': 'MULT'}"""
+    out = {}
+    for item in _list(v):
+        if "=" in item:
+            k, val = item.split("=", 1)
+            if k.strip() and val.strip():
+                out[k.strip().upper()] = val.strip().upper()
+    return out
+
+
 def _list(v: str) -> list:
     return [x.strip() for x in (v or "").split(",") if x.strip()]
 
@@ -114,7 +129,9 @@ def settings(cp) -> Settings:
     return Settings(
         profile=cp.get("contest", "profile").strip() or "auto",
         category=cp.get("contest", "category").strip().upper() or "MS",
-        m2_signal_source=cp.get("contest", "m2_signal_source").strip().lower() or "run1run2",
+        signal_source=(cp.get("contest", "signal_source", fallback="") or
+                       cp.get("contest", "m2_signal_source", fallback="")).strip().lower() or "run1run2",
+        signal_map=_map(cp.get("contest", "signal_map", fallback="")),
         db_path="" if cp.get("n1mm_db", "path").strip().lower() in ("", "auto") else
         cp.get("n1mm_db", "path").strip().strip('"'),
         db_follow=cp.get("n1mm_db", "path").strip().lower() == "auto",

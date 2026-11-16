@@ -8,7 +8,6 @@ from typing import Iterable, Optional
 TEN_MIN = "TEN_MIN"
 HOURLY = "HOURLY"
 MULT_SAME_BAND = "MULT_SAME_BAND"
-MULT_NOT_NEW = "MULT_NOT_NEW"
 
 RUN, MULT, ALL = "RUN", "MULT", "ALL"
 
@@ -118,6 +117,10 @@ class Result:
     status: dict = field(default_factory=dict)   # counter key -> SignalStatus
 
 
+def _minute(ts: datetime) -> datetime:
+    return ts.replace(second=0, microsecond=0)
+
+
 def _hour(ts: datetime) -> datetime:
     return ts.replace(minute=0, second=0, microsecond=0)
 
@@ -153,9 +156,6 @@ def evaluate(profile: Profile, qsos: Iterable[Qso], now: Optional[datetime] = No
             if run is not None and run.band == q.band:
                 res.faults.append(Fault(f"{MULT_SAME_BAND}:{q.id}", MULT_SAME_BAND, MULT, q,
                                         f"MULT QSO with {q.call} on {q.band} m while RUN is on {q.band} m"))
-            if q.is_mult is False:
-                res.faults.append(Fault(f"{MULT_NOT_NEW}:{q.id}", MULT_NOT_NEW, MULT, q,
-                                        f"MULT worked {q.call} on {q.band} m – not flagged as a new multiplier"))
 
         # --- band change accounting ---------------------------------------
         if s.band is None:
@@ -163,13 +163,15 @@ def evaluate(profile: Profile, qsos: Iterable[Qso], now: Optional[datetime] = No
         elif q.band != s.band:
             prev = s.band
             if profile.rule == TEN_MIN:
-                if q.ts < s.band_since + ten:
+                # judged like the CQ log checker: whole (Cabrillo) minutes – first QSO at
+                # 14:00 allows a change logged at 14:10, whatever the seconds were
+                if _minute(q.ts) < _minute(s.band_since) + ten:
                     mins = (q.ts - s.band_since).total_seconds() / 60
                     res.faults.append(Fault(
                         f"{TEN_MIN}:{q.id}", TEN_MIN, key, q,
                         f"{key} moved {prev} → {q.band} m after {mins:.1f} min "
-                        f"(on {prev} m since {s.band_since:%H:%M:%S}, free at "
-                        f"{s.band_since + ten:%H:%M:%S}) – QSO {q.call} {q.ts:%H:%M:%S}"))
+                        f"(on {prev} m since {s.band_since:%H:%M:%S}, allowed from "
+                        f"{_minute(s.band_since) + ten:%H:%M}) – QSO {q.call} {q.ts:%H:%M:%S}"))
             else:
                 hk = (key, _hour(q.ts))
                 hourly_counts[hk] = hourly_counts.get(hk, 0) + 1
@@ -187,6 +189,7 @@ def evaluate(profile: Profile, qsos: Iterable[Qso], now: Optional[datetime] = No
         now = items[-1].ts if items else utcnow()
     for key, s in st.items():
         if profile.rule == TEN_MIN:
+            # live countdown is deliberately stricter: 10 min from the exact second
             s.free_at = s.band_since + ten if s.band_since else None
         else:
             s.used_this_hour = hourly_counts.get((key, _hour(now)), 0)
@@ -195,8 +198,17 @@ def evaluate(profile: Profile, qsos: Iterable[Qso], now: Optional[datetime] = No
 
 
 def live_warning(profile: Profile, result: Result, signal: str, radio_band: Optional[str],
-                 now: datetime) -> Optional[str]:
-    """Warn if a QSO logged now on `radio_band` by `signal` would be a fault."""
+                 now: datetime, transmitting: bool = False) -> Optional[str]:
+    """Warn if a QSO logged now on `radio_band` by `signal` would be a fault.
+    While N1MM reports TX there, it is a possible early transmission (not yet a logged breach)."""
+    w = _live_warning(profile, result, signal, radio_band, now)
+    if w and transmitting:
+        return f"TX on {radio_band} m – possible early TX! " + w
+    return w
+
+
+def _live_warning(profile: Profile, result: Result, signal: str, radio_band: Optional[str],
+                  now: datetime) -> Optional[str]:
     if not radio_band:
         return None
     key = ALL if profile.entry_wide else signal

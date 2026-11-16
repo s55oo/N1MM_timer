@@ -80,28 +80,40 @@ makes the beep, so N1MM's delete-then-reinsert edits don't re-trigger alarms.
 
 ## Signal identity
 
-The user chose to use **N1MM's own Run/Mult flag**:
+Every QSO belongs to one signal: **RUN / MULT** (Multi-Single) or **TX1 / TX2** (Multi-Two).
+By default the timer takes it from N1MM's **`Run1Run2`** field. That field is N1MM's
+station/signal designation and what it writes as the Cabrillo transmitter id:
 
-* **MS (WW)**: `IsRunQSO = True` → **RUN**, otherwise **MULT**. N1MM writes
-  the same flag as the Cabrillo transmitter id (0 = run, 1 = mult).
-* **MS (WPX, Multi-One)**: one entry-wide counter. The flag is shown but not
-  used for the count.
-* **M2**: Run/Mult doesn't say which of the two transmitters made the QSO, so
-  the TX comes from a configurable source (`m2_signal_source`):
-  `run1run2` (default: N1MM's Run1/Run2 = Cabrillo TX id), `station` (one PC per TX), or `radionr`.
-  In the real CR3A WPX SSB 2026 database, 5 PCs shared 2 TX ids, so per-PC counting
-  found 0 problems while per-TX counting found 7 hours with 9–10 changes.
+| Category | `Run1Run2 = 1` | `Run1Run2 = 2` |
+|---|---|---|
+| MS (CQ WW) | RUN | MULT |
+| M2 | TX1 | TX2 |
+| MS (CQ WPX Multi-One) | one entry-wide counter, the field is not needed | |
 
-> Seen in a real database: `IsRunQSO` 0/1, `Run1Run2` 1/2, `RadioNR` 1. The UDP parser
-> accepts `True/False/1/0`. Still to verify on a live network: the UDP packets carry the same values.
+Several PCs may share one signal (e.g. RUN logged from 4 PCs). `signal_map` overrides it per
+PC (`PCE=RUN, MULT2=MULT`), and `signal_source` can switch to `radionr` or `station`.
+
+N1MM's **`IsRunQSO` is never used**. It records Run (CQ) vs S&P, not RUN vs MULT: a run
+station's S&P QSO is still the RUN signal. This was the mistake in 0.1.0, and PR #3
+pointed it out.
+
+Verified on real 2026 databases:
+
+* **9A7A, CQ WW SSB, Multi-Single** (6,641 QSOs, 5 PCs). With `Run1Run2` there are 0 MULT
+  QSOs on the RUN band and 3 ten-minute breaches. With `IsRunQSO` there would be 2,900 faults.
+* **CR3A, CQ WPX SSB, Multi-Two** (11,640 QSOs, 5 PCs on 2 TX ids). With `Run1Run2` there are
+  7 hours with 9–10 changes on one TX. Counting per PC would hide all of them.
+
+N1MM databases store **no multiplier flags** (`IsMultiplier1/2/3` are 0 for all 6,641 QSOs
+in the 9A7A log), so "the MULT may only work new multipliers" is not checked.
 
 ## Rule profiles (2026 rules)
 
 | Profile | Category | Counted per | Rule |
 |---|---|---|---|
-| CQ WW CW / SSB | MS | RUN, MULT independently | **10-minute rule**: after the first QSO on a band, the signal stays on that band ≥10 min. MULT must be on a different band than RUN and may only work new multipliers. |
+| CQ WW CW / SSB | MS | RUN, MULT independently | **10-minute rule**: after the first QSO on a band, the signal stays on that band ≥10 min. MULT must be on a different band than RUN. |
 | CQ WW CW / SSB | M2 | TX1, TX2 | max **8** band changes per clock hour |
-| CQ WW RTTY | MS | RUN, MULT independently | max **8** band changes per clock hour each. MULT on a different band than RUN, new mults only. |
+| CQ WW RTTY | MS | RUN, MULT independently | max **8** band changes per clock hour each. MULT on a different band than RUN. |
 | CQ WW RTTY | M2 | TX1, TX2 | max **8** per clock hour |
 | CQ WPX CW / SSB / RTTY | Multi-One | whole entry | max **10** band changes per clock hour |
 | CQ WPX CW / SSB / RTTY | M2 | TX1, TX2 | max **8** per clock hour |
@@ -115,8 +127,11 @@ Counting conventions (CQ FAQs):
   so a 12:59 QSO on 15 m followed by a 13:01 QSO on 20 m is a 13z change.
 * 20 → 40 → 20 is **two** changes.
 * Reaching the limit is allowed. Only the change that goes past it is a breach.
-* 10-minute rule: a change is allowed at `period_start + 10:00` or later. The
-  period starts with the first QSO on the band.
+* 10-minute rule: the period starts with the first QSO on the band. Logged QSOs are
+  judged in **whole minutes**, like the CQ log checker, which only sees Cabrillo
+  minutes: first QSO at 14:00:30 allows a change logged at 14:10:05. The *live*
+  countdown is stricter and counts from the exact second (free at 14:10:30). In the
+  9A7A log this removes 4 seconds-only "breaches" and leaves the 3 real ones.
 
 > ⚠ The WPX RTTY Multi-Two hourly limit is assumed to be 8 (as in WPX CW/SSB).
 > Check it against the 2027 WPX RTTY rules before February.
@@ -128,9 +143,11 @@ Counting conventions (CQ FAQs):
 | `TEN_MIN` | Signal changed band less than 10 min after its period started |
 | `HOURLY` | Band change exceeded the hourly limit for the counter |
 | `MULT_SAME_BAND` | MULT QSO on the band RUN is currently on (WW MS) |
-| `MULT_NOT_NEW` | MULT QSO that N1MM did not flag as a multiplier (WW MS, live only) |
 
-Faults come from **logged QSOs**. Separately, **live warnings** use RadioInfo:
+Faults come from **logged QSOs**. While N1MM reports a transmission (`IsTransmitting`) on a
+band where a QSO would break a rule, the live warning becomes **"possible early TX"**. It is
+still not a logged breach, and transmissions N1MM doesn't start itself (PTT, paddle) are
+not reported. Separately, **live warnings** use RadioInfo:
 "RUN radio is on 20 m but RUN is locked to 40 m until 14:32:10. A QSO now
 would be a breach." These clear by themselves and don't make the beep.
 

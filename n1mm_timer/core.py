@@ -19,7 +19,8 @@ from .rules import utcnow as rules_utcnow
 class Settings:
     profile: str = "auto"          # profile key or "auto" (from N1MM contest name)
     category: str = "MS"           # MS or M2 (UDP has no category; the N1MM database has)
-    m2_signal_source: str = "run1run2"  # run1run2 | station | radionr
+    signal_source: str = "run1run2"  # run1run2 | radionr | station  (MS: 1=RUN 2=MULT, M2: TX1/TX2)
+    signal_map: dict = field(default_factory=dict)  # PC (StationName) -> RUN/MULT/TX1/TX2 override
     db_path: str = ""              # N1MM .s3db to poll (empty = UDP only, unless db_follow)
     db_follow: bool = False        # follow the log N1MM has open on this PC (AppInfo / newest)
     db_dirs: list = field(default_factory=list)   # extra folders with N1MM databases
@@ -107,23 +108,35 @@ class Watcher:
         return rules.profile_for_contest(self.contest_name, cat)
 
     def signal_of(self, row_or_contact, profile: rules.Profile) -> str:
+        """RUN/MULT (MS) or TX1/TX2 (M2) of a logged QSO.
+
+        Default source is N1MM's Run1Run2 field – what N1MM writes as the Cabrillo
+        transmitter id (verified on real logs: 9A7A CQ WW SSB MS, CR3A CQ WPX SSB M2).
+        N1MM's IsRunQSO is Run vs S&P and is NOT used: a run station's S&P QSO is still RUN.
+        A per-PC entry in signal_map overrides everything except a Cabrillo TX column."""
         g = (lambda k: row_or_contact[k]) if not isinstance(row_or_contact, Contact) else \
             (lambda k: getattr(row_or_contact, k))
         tx = g("tx") if not isinstance(row_or_contact, Contact) else None
-        if profile.category == "MS":
-            if tx is not None and tx != "":
+        if tx is not None and tx != "":                       # Cabrillo transmitter column
+            if profile.category == "MS":
                 return rules.RUN if tx == "0" else rules.MULT
-            is_run = g("is_run")
-            return rules.MULT if is_run in (0, False) else rules.RUN
-        # M2
-        if tx is not None and tx != "":
             return f"TX{int(tx) + 1}"
-        src = self.settings.m2_signal_source
-        if src == "radionr":
-            return f"TX{g('radionr') or '?'}"
-        if src == "run1run2":
-            return f"TX{g('run1run2') or '?'}"
-        return (g("station") or "?").upper()
+        station = (g("station") or "").upper()
+        mapped = self.settings.signal_map.get(station)
+        if mapped:
+            return mapped
+        return self._signal_from_fields(profile, station, g("radionr"), g("run1run2"))
+
+    def _signal_from_fields(self, profile, station, radionr, run1run2) -> str:
+        src = self.settings.signal_source
+        raw = {"radionr": radionr, "run1run2": run1run2}.get(src)
+        if profile.category == "MS":
+            if src == "station":
+                return rules.RUN                     # unmapped PC: assume RUN
+            return rules.MULT if str(raw or "").strip() == "2" else rules.RUN
+        if src == "station":
+            return station or "?"
+        return f"TX{str(raw or '').strip() or '?'}"
 
     # ---- packets ----------------------------------------------------------
     def handle_packet(self, data: bytes, addr: tuple = ("", 0)):
@@ -238,7 +251,8 @@ class Watcher:
                     if time.monotonic() - t > self.RADIO_STALE_S:
                         continue
                     sig = self._radio_signal(prof, station, radionr, fields, q)
-                    w = rules.live_warning(prof, res, sig, n1mm.radio_band(fields), now)
+                    w = rules.live_warning(prof, res, sig, n1mm.radio_band(fields), now,
+                                           bool(n1mm._bool(fields.get("istransmitting"))))
                     if w:
                         warnings.append((f"{station} R{radionr}", sig, w))
             age = None if self.last_packet is None else time.monotonic() - self.last_packet
@@ -249,16 +263,13 @@ class Watcher:
     def _radio_signal(self, prof, station, radionr, fields, qsos) -> str:
         """Which signal is this radio? The signal of this PC's latest logged QSO (N1MM's
         RadioInfo carries no Run1/Run2), else MS: N1MM IsRunning; M2: the configured source."""
+        mapped = self.settings.signal_map.get((station or "").upper())
+        if mapped:
+            return mapped
         mine = [q for q in qsos if q.station == station]
         if mine:
             return max(mine, key=lambda q: q.ts).signal
-        if prof.category == "M2":
-            src = self.settings.m2_signal_source
-            if src == "station":
-                return (station or "?").upper()
-            return f"TX{radionr or '?'}"
-        running = n1mm._bool(fields.get("isrunning"))
-        return rules.MULT if running is False else rules.RUN
+        return self._signal_from_fields(prof, (station or "").upper(), radionr, "")
 
     def _rule_text(self, prof, res, signal, now):
         key = rules.ALL if prof.entry_wide else signal

@@ -70,10 +70,10 @@ class App:
         cb2 = ttk.Combobox(top, textvariable=self.v_cat, width=4, state="readonly", values=["MS", "M2"])
         cb2.pack(side="left", padx=4)
         cb2.bind("<<ComboboxSelected>>", self.on_settings)
-        ttk.Label(top, text="M2 TX from").pack(side="left", padx=(10, 0))
-        self.v_src = tk.StringVar(value=self.watcher.settings.m2_signal_source)
+        ttk.Label(top, text="Signal from").pack(side="left", padx=(10, 0))
+        self.v_src = tk.StringVar(value=self.watcher.settings.signal_source)
         cb3 = ttk.Combobox(top, textvariable=self.v_src, width=9, state="readonly",
-                           values=["run1run2", "station", "radionr"])
+                           values=["run1run2", "radionr", "station"])
         cb3.pack(side="left", padx=4)
         cb3.bind("<<ComboboxSelected>>", self.on_settings)
         self.l_clock = ttk.Label(top, font=("Consolas", 14, "bold"))
@@ -134,10 +134,10 @@ class App:
     # ---- actions --------------------------------------------------------------
     def on_settings(self, _evt=None):
         s = self.watcher.settings
-        s.profile, s.category, s.m2_signal_source = self.v_profile.get(), self.v_cat.get(), self.v_src.get()
+        s.profile, s.category, s.signal_source = self.v_profile.get(), self.v_cat.get(), self.v_src.get()
         self.cp.set("contest", "profile", s.profile)
         self.cp.set("contest", "category", s.category)
-        self.cp.set("contest", "m2_signal_source", s.m2_signal_source)
+        self.cp.set("contest", "signal_source", s.signal_source)
         try:
             config.save(self.cp)
         except OSError:

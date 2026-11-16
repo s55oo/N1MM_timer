@@ -32,7 +32,7 @@ def contact(ts, station, band, call, is_run, is_mult, contest, qid, tag="contact
 <{tag}><app>N1MM</app><contestname>{contest}</contestname><contestnr>1</contestnr>
 <timestamp>{ts:%Y-%m-%d %H:%M:%S}</timestamp><mycall>S50A</mycall><band>{MHZ[band]}</band>
 <rxfreq>{FREQ[band]}</rxfreq><txfreq>{FREQ[band]}</txfreq><operator>S55OO</operator><mode>CW</mode>
-<call>{call}</call><radionr>1</radionr><run1run2>1</run1run2>
+<call>{call}</call><radionr>1</radionr><run1run2>{1 if is_run else 2}</run1run2>
 <ismultiplier1>{int(is_mult)}</ismultiplier1><ismultiplier2>0</ismultiplier2><ismultiplier3>0</ismultiplier3>
 <IsRunQSO>{is_run}</IsRunQSO><StationName>{station}</StationName><ID>{qid}</ID>
 <IsOriginal>True</IsOriginal></{tag}>""".encode()
