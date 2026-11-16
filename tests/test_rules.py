@@ -172,3 +172,79 @@ class TestLiveWarning(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUntilBackInCompliance(unittest.TestCase):
+    """CQ WW FAQ: early QSOs 'are in violation ... removed without penalty';
+    CQ WPX FAQ: 'loss of all QSOs on that transmitter until it is back in compliance'."""
+
+    def test_all_early_qsos_on_new_band_are_counted(self):
+        P = PROFILES["CQWW-CW-MS"]
+        qs = [q(0, 0, "40")] + [q(i, 3 + i, "20") for i in range(1, 7)] + [q(9, 10, "20")]
+        r = evaluate(P, qs)              # 20 m QSOs at 12:04..12:09 are early, 12:10 is legal
+        self.assertEqual(len(r.faults), 1)
+        f = r.faults[0]
+        self.assertEqual([a.id for a in f.affected], ["1", "2", "3", "4", "5", "6"])
+        self.assertIn("6 QSOs on 20 m (12:04:00–12:09:00) would be removed", f.text)
+        self.assertEqual(r.status[RUN].band, "20")
+
+    def test_return_to_old_band_is_compliance_and_period_unchanged(self):
+        P = PROFILES["CQWW-CW-MS"]
+        # 40 since 12:00, one early QSO on 20 at 12:04, back on 40 at 12:05, 20 again at 12:10
+        r = evaluate(P, [q(1, 0, "40"), q(2, 4, "20"), q(3, 5, "40"), q(4, 10, "20")])
+        self.assertEqual([a.id for f in r.faults for a in f.affected], ["2"])
+        self.assertEqual((r.status[RUN].band, r.status[RUN].band_since), ("20", T0 + timedelta(minutes=10)))
+
+    def test_ww_faq_example_1400_1410(self):
+        P = PROFILES["CQWW-SSB-MS"]
+        t = datetime(2026, 10, 24, 14, 0, 59)
+        ok = [Qso("1", t, "20", RUN), Qso("2", datetime(2026, 10, 24, 14, 10, 0), "15", RUN)]
+        self.assertEqual(evaluate(P, ok).faults, [])
+        bad = [Qso("1", t, "20", RUN), Qso("2", datetime(2026, 10, 24, 14, 9, 59), "15", RUN)]
+        self.assertEqual(len(evaluate(P, bad).faults), 1)
+
+    def test_no_cascade_after_early_change(self):
+        # MULT 15 m since 14:06:45, early to 20 m at 14:11:41 (3 QSOs), stays; 40 m at 14:21:51
+        # is 10 min after the 20 m period began -> legal (9A7A case)
+        P = PROFILES["CQWW-SSB-MS"]
+        d = datetime(2026, 10, 24)
+        qs = [Qso("a", d.replace(hour=14, minute=6, second=45), "15", MULT),
+              Qso("b", d.replace(hour=14, minute=11, second=41), "20", MULT),
+              Qso("c", d.replace(hour=14, minute=12, second=5), "20", MULT),
+              Qso("d", d.replace(hour=14, minute=13, second=6), "20", MULT),
+              Qso("e", d.replace(hour=14, minute=17, second=0), "20", MULT),
+              Qso("f", d.replace(hour=14, minute=21, second=51), "40", MULT)]
+        r = evaluate(P, qs)
+        self.assertEqual(len(r.faults), 1)
+        self.assertEqual([a.id for a in r.faults[0].affected], ["b", "c", "d"])
+
+    def test_hourly_excess_lost_until_next_hour(self):
+        P = PROFILES["CQWW-CW-M2"]
+        bands = ["20", "40"] * 4 + ["20"]                     # 8 legal changes 12:00..12:40
+        qs = [Qso(f"a{i}", T0 + timedelta(minutes=5 * i), b, "TX1") for i, b in enumerate(bands)]
+        qs += [Qso("x1", T0 + timedelta(minutes=50), "15", "TX1"),   # 9th change -> out
+               Qso("x2", T0 + timedelta(minutes=55), "15", "TX1"),   # still out (12z)
+               Qso("y1", T0 + timedelta(minutes=58), "20", "TX1"),   # back: change #10, still out
+               Qso("z1", T0 + timedelta(minutes=61), "20", "TX1")]   # 13z: back in compliance
+        r = evaluate(P, qs, now=T0 + timedelta(minutes=62))
+        self.assertEqual(len(r.faults), 1)
+        self.assertEqual([a.id for a in r.faults[0].affected], ["x1", "x2", "y1"])
+        self.assertIn("(until 13:00)", r.faults[0].text)
+        self.assertEqual((r.status["TX1"].band, r.status["TX1"].used_this_hour), ("20", 0))
+
+    def test_no_cascade_into_next_hour(self):
+        # 9th change at 12:50 to 15 m, stays on 15 m into 13z: 13z starts with 0 changes
+        P = PROFILES["CQWPX-SSB-M2"]
+        bands = ["20", "40"] * 4 + ["20"]
+        qs = [Qso(f"a{i}", T0 + timedelta(minutes=5 * i), b, "TX2") for i, b in enumerate(bands)]
+        qs += [Qso("x", T0 + timedelta(minutes=50), "15", "TX2"), Qso("y", T0 + timedelta(minutes=70), "15", "TX2")]
+        r = evaluate(P, qs, now=T0 + timedelta(minutes=71))
+        self.assertEqual(r.status["TX2"].used_this_hour, 0)
+        self.assertEqual([a.id for a in r.faults[0].affected], ["x"])
+
+    def test_wpx_faq_example_three_changes_in_13z(self):
+        P = PROFILES["CQWPX-CW-MS"]
+        rows = [("12:59", "15"), ("13:00", "20"), ("13:10", "15"), ("13:59", "40"), ("14:00", "10")]
+        qs = [Qso(str(i), datetime(2026, 5, 30, int(t[:2]), int(t[3:])), b, RUN) for i, (t, b) in enumerate(rows)]
+        r = evaluate(P, qs[:4], now=datetime(2026, 5, 30, 13, 59))
+        self.assertEqual(r.status[rules.ALL].used_this_hour, 3)

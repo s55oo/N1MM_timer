@@ -30,7 +30,7 @@ def build(snap, seq: int) -> dict:
         "profile": prof.key if prof else None,
         "signals": sigs,
         "faults": [{"id": f.id, "kind": f.kind, "signal": f.signal, "time": _iso(f.qso.ts),
-                    "station": f.qso.station, "call": f.qso.call, "text": f.text, "acked": a}
+                    "station": f.qso.station, "call": f.qso.call, "qsos": len(f.affected), "text": f.text, "acked": a}
                    for f, a in snap.faults],
         "warnings": [{"station": st, "signal": sig, "text": t} for st, sig, t in snap.warnings],
     }

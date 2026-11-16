@@ -11,7 +11,7 @@ closed: the watcher logic lives here, and PingPong only shows the warnings.
 | 1 | Listen to N1MM directly, evaluate the rules, show faults and live warnings in its own window (with sound) | this version |
 | 1a | Read the N1MM contest database directly (live polling + `--db` log check) | this version |
 | 1b | `--check` a Cabrillo log after the contest (or bootstrap the ledger from one) | this version |
-| 1c | One PC: follow the log N1MM has open (Application Info), Stations overview, UDP 12060 | 0.2.0 |
+| 1c | One PC: follow the log N1MM has open (Application Info), Stations overview, UDP 12063 | 0.2.0 |
 | 2 | Push faults and live status to PingPong so the lamps can flash | JSON-over-UDP output already here (off by default); PingPong side still to do |
 
 The tool is **advisory only**. It never keys, blocks or edits anything in N1MM
@@ -21,7 +21,7 @@ and never writes N1MM's database.
 
 ```
  N1MM PC #1 ─┐  contactinfo / contactreplace / contactdelete / RadioInfo / AppInfo
- N1MM PC #2 ─┼──── UDP XML ───►  N1MM_timer  (port 12060 by default)
+ N1MM PC #2 ─┼──── UDP XML ───►  N1MM_timer  (port 12063 by default)
  N1MM PC #n ─┘                       │
                                       ├─ store.py   SQLite ledger (timer.db), keyed by N1MM QSO GUID
                                       ├─ rules.py   full re-evaluation on every change → faults + status
@@ -31,7 +31,7 @@ and never writes N1MM's database.
 
 N1MM setup on **every** networked PC: *Config → Configure Ports… → Broadcast
 Data*: tick **Contacts** and **Radio** (and **App Info**) and add
-`<timer-ip>:12060` (`127.0.0.1:12060` on the timer PC itself) to each address (N1MM accepts several space-separated
+`<timer-ip>:12063` (`127.0.0.1:12063` on the timer PC itself) to each address (N1MM accepts several space-separated
 destinations, so PingPong's own entries stay as they are).
 
 ### N1MM database source
@@ -62,7 +62,7 @@ database (`.s3db` or its `-wal`, never *N1MM Admin* / *Packet Spots*) is used an
 
 ### UDP port
 
-Default 12060. Several ports are allowed. Each port is bound exclusively (`SO_EXCLUSIVEADDRUSE`
+Default 12063 (12060 is N1MM's usual port for other programs, 12062 the PingPong lamp's). Several ports are allowed. Each port is bound exclusively (`SO_EXCLUSIVEADDRUSE`
 on Windows, no `SO_REUSEADDR`). Windows delivers a unicast datagram to only one of several
 sockets sharing a port, so a shared port means silently missing packets. The timer refuses
 the port and says which one instead.
@@ -127,6 +127,14 @@ Counting conventions (CQ FAQs):
   so a 12:59 QSO on 15 m followed by a 13:01 QSO on 20 m is a 13z change.
 * 20 → 40 → 20 is **two** changes.
 * Reaching the limit is allowed. Only the change that goes past it is a breach.
+* **Every QSO made out of compliance counts, not just the first one.** The CQ WW FAQ says early
+  contacts "are in violation ... and they will be removed without penalty". The CQ WPX FAQ says
+  "loss of all QSOs on that transmitter until it is back in compliance". The timer processes the
+  log the way a checker would: a QSO that breaks the rule is removed, so it does not move the
+  signal. The signal stays legally on its previous band, and its following QSOs off that band
+  are out too, until it is back on that band or a change becomes legal (10-minute rule: the
+  period is over; hourly limit: the next clock hour). Each such episode is **one fault** that
+  lists all affected QSOs.
 * 10-minute rule: the period starts with the first QSO on the band. Logged QSOs are
   judged in **whole minutes**, like the CQ log checker, which only sees Cabrillo
   minutes: first QSO at 14:00:30 allows a change logged at 14:10:05. The *live*

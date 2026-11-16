@@ -2,7 +2,7 @@
 
 Band-change watcher for multi-operator contest stations running **N1MM Logger+**.
 Run it on **one** PC. It follows the log N1MM has open on that PC (read-only) and
-the N1MM network traffic (UDP, port 12060 by default). It then:
+the N1MM network traffic (UDP, port **12063** by default). It then:
 
 * checks every logged QSO against the 2026 CQ WW / CQ WPX band-change rules;
 * shows a **Stations** overview: every N1MM radio with band, mode, frequency,
@@ -26,9 +26,12 @@ PingPong interface.
 3. In N1MM on **every** networked PC: *Config → Configure Ports, Mode Control, Winkey, etc. →
    Broadcast Data*. Tick **Radio**, **Contacts** and **Application Info**, and add the timer PC
    to each of those lines (several destinations are separated by a space):
-   * on the timer PC itself: `127.0.0.1:12060`
-   * on the other PCs: the timer PC's address, e.g. `192.168.1.10:12060`, or your subnet
-     broadcast, e.g. `192.168.1.255:12060`.
+   * on the timer PC itself: `127.0.0.1:12063`
+   * on the other PCs: the timer PC's address, e.g. `192.168.1.10:12063`, or your subnet
+     broadcast, e.g. `192.168.1.255:12063`.
+
+   Keep the existing destinations, e.g. the PingPong lamp's `127.0.0.1:12062`. A Radio line
+   then looks like `127.0.0.1:12062 127.0.0.1:12063`.
 
    N1MM sends only to the addresses listed. `127.0.0.1` reaches only programs on the same PC.
 4. The timer follows the log N1MM has open on its PC (`[n1mm_db] path = auto`). Contest and
@@ -36,15 +39,15 @@ PingPong interface.
    **Category** MS or M2 in the window.
 
 **One port, one program.** Windows hands each N1MM packet on a port to only one program. If
-another program on the timer PC already listens on 12060, the timer says so (red, top of the
+another program on the timer PC already listens on 12063, the timer says so (red, top of the
 window) instead of silently missing packets. Then give the timer another port
-(`[udp] port = 12064`, several allowed: `12060, 12064`) and add that port to N1MM's lines.
+(`[udp] port = 12064`, several allowed: `12063, 12064`) and add that port to N1MM's lines.
 
 Try it without N1MM:
 
 ```
 python run_timer.py            # window 1
-python tools/simulate_n1mm.py   # window 2 – 4 faults + 2 live warnings in ~20 s
+python tools/simulate_n1mm.py   # window 2 – 3 faults + 2 live warnings in ~20 s
 ```
 
 Check a log (exit code 1 if faults were found):
@@ -60,7 +63,7 @@ python run_timer.py --check S50A.cbr                    # Cabrillo instead of th
 
 * **The open N1MM log** (default, **Follow N1MM log** button / `[n1mm_db] path = auto`). The
   timer reads which database and contest N1MM has open from N1MM's **Application Info** packet
-  (sent to `127.0.0.1:12060` on the same PC). When you open another log in N1MM, the timer
+  (sent to `127.0.0.1:12063` on the same PC). When you open another log in N1MM, the timer
   switches to it and starts a fresh ledger. Until an Application Info packet arrives, it uses the
   log database N1MM wrote to most recently (shown as *guessed*). **N1MM database…** picks a fixed
   file instead. The database is polled every 5 s (only re-read when N1MM wrote something). It sees

@@ -10,12 +10,13 @@ from .core import Settings
 DEFAULT_INI = """\
 ; N1MM_timer configuration
 [udp]
-; UDP port(s) N1MM sends to, e.g. 12060 or 12060, 12064.
+; UDP port(s) N1MM sends to, e.g. 12063 or 12063, 12064 (12060 is N1MM's usual port for
+; other programs, 12062 is the PingPong lamp's).
 ; On EVERY N1MM PC: Config > Configure Ports > Broadcast Data – add <this-pc-ip>:<port>
-; (or your subnet broadcast, e.g. 192.168.1.255:12060) to the Radio, Contacts and
+; (or your subnet broadcast, e.g. 192.168.1.255:12063) to the Radio, Contacts and
 ; Application Info lines. 127.0.0.1 reaches only programs on that same PC.
 ; The port must not be used by another program on this PC.
-port = 12060
+port = 12063
 bind = 0.0.0.0
 ; optional comma-separated source IP allow list (empty = accept all)
 allowed_ips =

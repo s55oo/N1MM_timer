@@ -210,7 +210,7 @@ class UdpListener(threading.Thread):
 
 
 def parse_ports(value: str) -> list:
-    """'12060' or '12060, 12064' -> [12060, 12064] (1..65535, no duplicates)."""
+    """'12063' or '12063, 12064' -> [12063, 12064] (1..65535, no duplicates)."""
     out = []
     for part in re.split(r"[,\s;]+", str(value or "").strip()):
         if not part:
@@ -220,7 +220,7 @@ def parse_ports(value: str) -> list:
             raise ValueError(f"bad UDP port {p}")
         if p not in out:
             out.append(p)
-    return out or [12060]
+    return out or [12063]
 
 
 class Listeners:

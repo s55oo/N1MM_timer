@@ -51,7 +51,8 @@ def check_cabrillo(path: str, profile_key: str = None) -> int:
             sig = f"TX{int(q.tx) + 1}" if q.tx is not None else "TX1"
         qsos.append(rules.Qso(f"{i + 1}", q.ts, q.band, sig, q.call))
     res = rules.evaluate(prof, qsos)
-    print(f"{prof.title}: {len(qsos)} QSOs, {len(res.faults)} fault(s)")
+    lost = len({a.id for f in res.faults for a in f.affected})
+    print(f"{prof.title}: {len(qsos)} QSOs, {len(res.faults)} fault(s), {lost} QSO(s) at risk")
     if no_tx and (prof.run_mult or prof.category == "M2"):
         print(f"  warning: {no_tx} QSO lines have no transmitter-id column; treated as RUN/TX1")
     for f in res.faults:
@@ -85,7 +86,8 @@ def check_db(path: str, contest_nr=None, profile_key=None, m2_source=None, list_
     for q in w.qsos(prof):
         by[q.signal] = by.get(q.signal, 0) + 1
     tx = f", signal from {st.signal_source}"
-    print(f"{prof.title}{tx}: {snap.qso_count} QSOs {by}, {len(snap.faults)} fault(s)")
+    lost = len({a.id for f, _ in snap.faults for a in f.affected})
+    print(f"{prof.title}{tx}: {snap.qso_count} QSOs {by}, {len(snap.faults)} fault(s), {lost} QSO(s) at risk")
     for f, _ in sorted(snap.faults, key=lambda x: x[0].qso.ts):
         print(f"  {f.qso.ts:%Y-%m-%d %H:%M:%S}  {f.qso.station:<8} {f.kind:<15} {f.text}")
     return 1 if snap.faults else 0

@@ -81,11 +81,15 @@ class Qso:
 
 @dataclass
 class Fault:
+    """One out-of-compliance episode of a signal: the first QSO that broke the rule and
+    every further QSO of that signal until it was back in compliance (all are removed
+    by the CQ log checkers, without further penalty)."""
     id: str
     kind: str
     signal: str
     qso: Qso
     text: str
+    affected: list = field(default_factory=list)   # all QSOs of the episode (incl. qso)
 
 
 @dataclass
@@ -130,15 +134,25 @@ def counter_key(profile: Profile, q: Qso) -> str:
 
 
 def evaluate(profile: Profile, qsos: Iterable[Qso], now: Optional[datetime] = None) -> Result:
-    """Evaluate all QSOs (any order) against a profile.
+    """Evaluate all QSOs (any order) against a profile, the way the CQ log checkers do.
 
-    Returns the faults found and the per-counter status as of `now`
-    (defaults to the time of the last QSO).
+    Changes are counted on the log as it is (no cascades from removed QSOs).
+    10-minute rule: after an early change, every QSO of that signal on the new band before
+    the allowed minute is out of compliance; going straight back to the band it left is
+    back in compliance (original period restored).
+    Hourly limits: after the change that exceeds the limit, every QSO of that signal is
+    out of compliance until the next clock hour.
+    Each such episode is one Fault listing all affected QSOs.
+    CQ WW FAQ: "those contacts are in violation ... removed without penalty";
+    CQ WPX FAQ: "loss of all QSOs on that transmitter until it is back in compliance".
+
+    Returns the faults and the per-counter status as of `now` (default: last QSO time).
     """
     items = sorted((q for q in qsos if q.band), key=lambda q: (q.ts, q.id))
     res = Result()
     st: dict = {}
-    hourly_counts: dict = {}   # (key, hour) -> count
+    episode: dict = {}         # key -> open Fault while the signal is out of compliance
+    hourly_counts: dict = {}   # (key, hour) -> legal changes
     ten = timedelta(minutes=10)
 
     def status(key: str) -> SignalStatus:
@@ -150,39 +164,72 @@ def evaluate(profile: Profile, qsos: Iterable[Qso], now: Optional[datetime] = No
         key = counter_key(profile, q)
         s = status(key)
 
-        # --- WW Multi-Single run/mult constraints -------------------------
+        # --- WW Multi-Single: the two signals must be on different bands ----
         if profile.run_mult and q.signal == MULT:
             run = st.get(RUN)
             if run is not None and run.band == q.band:
                 res.faults.append(Fault(f"{MULT_SAME_BAND}:{q.id}", MULT_SAME_BAND, MULT, q,
-                                        f"MULT QSO with {q.call} on {q.band} m while RUN is on {q.band} m"))
+                                        f"MULT QSO with {q.call} on {q.band} m while RUN is on {q.band} m",
+                                        [q]))
 
         # --- band change accounting ---------------------------------------
+        if profile.rule == HOURLY:
+            # Hourly limits are counted on the logged QSOs as they are (CQ WPX FAQ: "the band
+            # change occurs at the time the first QSO on the new band is logged"). After the
+            # change that exceeds the limit, all QSOs of that signal are out of compliance
+            # until the next clock hour.
+            f = episode.get(key)
+            if f is not None and _hour(q.ts) != _hour(f.qso.ts):
+                episode.pop(key, None)
+                f = None
+            if s.band is not None and q.band != s.band:
+                hk = (key, _hour(q.ts))
+                hourly_counts[hk] = hourly_counts.get(hk, 0) + 1
+                if hourly_counts[hk] > profile.hourly_limit and f is None:
+                    f = Fault(f"{HOURLY}:{q.id}", HOURLY, key, q, "", [])
+                    f._from_band, f._since = s.band, s.band_since
+                    episode[key] = f
+                    res.faults.append(f)
+                s.band, s.band_since = q.band, q.ts
+            elif s.band is None:
+                s.band, s.band_since = q.band, q.ts
+            if f is not None:
+                f.affected.append(q)
+            s.last_qso = q.ts
+            continue
+
+        # 10-minute rule, counted on the log as it is (like the hourly limits): an early
+        # change still starts the new band's period; every QSO of that signal on the new
+        # band before the allowed minute is out of compliance (CQ WW FAQ: those contacts
+        # "are in violation ... removed without penalty"). Going straight back to the band
+        # it left early is back in compliance, with the original period restored.
+        f = episode.get(key)
+        if f is not None and _minute(q.ts) >= f._allowed:
+            episode.pop(key, None)
+            f = None
         if s.band is None:
             s.band, s.band_since = q.band, q.ts
         elif q.band != s.band:
-            prev = s.band
-            if profile.rule == TEN_MIN:
-                # judged like the CQ log checker: whole (Cabrillo) minutes – first QSO at
-                # 14:00 allows a change logged at 14:10, whatever the seconds were
-                if _minute(q.ts) < _minute(s.band_since) + ten:
-                    mins = (q.ts - s.band_since).total_seconds() / 60
-                    res.faults.append(Fault(
-                        f"{TEN_MIN}:{q.id}", TEN_MIN, key, q,
-                        f"{key} moved {prev} → {q.band} m after {mins:.1f} min "
-                        f"(on {prev} m since {s.band_since:%H:%M:%S}, allowed from "
-                        f"{_minute(s.band_since) + ten:%H:%M}) – QSO {q.call} {q.ts:%H:%M:%S}"))
-            else:
-                hk = (key, _hour(q.ts))
-                hourly_counts[hk] = hourly_counts.get(hk, 0) + 1
-                n = hourly_counts[hk]
-                if n > profile.hourly_limit:
-                    res.faults.append(Fault(
-                        f"{HOURLY}:{q.id}", HOURLY, key, q,
-                        f"{key} band change #{n} in the {q.ts:%H}z hour (limit {profile.hourly_limit}): "
-                        f"{prev} → {q.band} m – QSO {q.call} {q.ts:%H:%M:%S}"))
+            if f is not None and q.band == f._from_band:            # went back: compliant
+                s.band, s.band_since = f._from_band, f._since
+                episode.pop(key, None)
+                s.last_qso = q.ts
+                continue
+            episode.pop(key, None)
+            allowed = _minute(s.band_since) + ten                  # whole (Cabrillo) minutes
+            if _minute(q.ts) < allowed:
+                f = Fault(f"{TEN_MIN}:{q.id}", TEN_MIN, key, q, "", [q])
+                f._from_band, f._since, f._allowed = s.band, s.band_since, allowed
+                episode[key] = f
+                res.faults.append(f)
             s.band, s.band_since = q.band, q.ts
+        elif f is not None:
+            f.affected.append(q)
         s.last_qso = q.ts
+
+    for f in res.faults:
+        if f.kind in (TEN_MIN, HOURLY):
+            f.text = _episode_text(profile, f, ten)
 
     # --- status as of `now` ------------------------------------------------
     if now is None:
@@ -195,6 +242,25 @@ def evaluate(profile: Profile, qsos: Iterable[Qso], now: Optional[datetime] = No
             s.used_this_hour = hourly_counts.get((key, _hour(now)), 0)
     res.status = st
     return res
+
+
+def _episode_text(profile: Profile, f: Fault, ten: timedelta) -> str:
+    q, n = f.qso, len(f.affected)
+    bands = []
+    for a in f.affected:
+        if a.band not in bands:
+            bands.append(a.band)
+    last = f.affected[-1].ts
+    span = f"{q.ts:%H:%M:%S}" if n == 1 else f"{q.ts:%H:%M:%S}–{last:%H:%M:%S}"
+    lost = f"{n} QSO{'s' if n != 1 else ''} on {'/'.join(bands)} m ({span}) would be removed"
+    if f.kind == TEN_MIN:
+        mins = (q.ts - f._since).total_seconds() / 60
+        return (f"{f.signal} left {f._from_band} m after {mins:.1f} min (on {f._from_band} m since "
+                f"{f._since:%H:%M:%S}, allowed from {_minute(f._since) + ten:%H:%M}): {lost} – "
+                f"first {q.call} {q.ts:%H:%M:%S}")
+    return (f"{f.signal} band change #{profile.hourly_limit + 1} in the {q.ts:%H}z hour "
+            f"(limit {profile.hourly_limit}): {f._from_band} → {q.band} m – {lost} "
+            f"(until {_hour(q.ts) + timedelta(hours=1):%H:%M}) – first {q.call} {q.ts:%H:%M:%S}")
 
 
 def live_warning(profile: Profile, result: Result, signal: str, radio_band: Optional[str],

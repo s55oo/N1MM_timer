@@ -17,7 +17,7 @@ class TestPorts(unittest.TestCase):
     def test_parse(self):
         self.assertEqual(parse_ports("12060"), [12060])
         self.assertEqual(parse_ports("12060, 12064;12060 12070"), [12060, 12064, 12070])
-        self.assertEqual(parse_ports(""), [12060])
+        self.assertEqual(parse_ports(""), [12063])
         with self.assertRaises(ValueError):
             parse_ports("70000")
 
