@@ -12,7 +12,7 @@ rem  Optional code signing: set SIGN_PFX=path\cert.pfx and SIGN_PFX_PASSWORD=...
 rem  Output: dist\N1MM_timer-<version>-win64.zip + dist\SHA256SUMS.txt
 rem ===========================================================================
 cd /d "%~dp0"
-set "PYI_SPEC=pyinstaller>=6.11,<7"
+set "PYI_VERSION=6.22.3"
 set "VENV=.venv-build"
 
 where python >nul 2>nul || (echo Python not found in PATH & exit /b 1)
@@ -23,23 +23,21 @@ if not exist "%VENV%\Scripts\python.exe" (
 set "PY=%VENV%\Scripts\python.exe"
 "%PY%" -m pip install --quiet --upgrade pip || exit /b 1
 
-echo [2/7] installing PyInstaller
+echo [2/7] installing PyInstaller %PYI_VERSION%
 if /i "%~1"=="prebuilt" (
-  "%PY%" -m pip install --quiet "%PYI_SPEC%" || exit /b 1
+  "%PY%" -m pip install --quiet "pyinstaller==%PYI_VERSION%" || exit /b 1
   echo   WARNING: prebuilt bootloader - antivirus false positives are more likely
 ) else (
-  if not exist "%VENV%\bootloader-from-source.ok" (
-    "%PY%" -m pip uninstall -y pyinstaller >nul 2>nul
-    "%PY%" -m pip cache remove pyinstaller >nul 2>nul
-    set PYINSTALLER_COMPILE_BOOTLOADER=1
-    "%PY%" -m pip install --no-binary=pyinstaller "%PYI_SPEC%"
+  if not exist "%VENV%\bootloader-%PYI_VERSION%.ok" (
+    "%PY%" -m pip install --quiet setuptools wheel || exit /b 1
+    powershell -NoProfile -ExecutionPolicy Bypass -File packaging\build_bootloader.ps1 -Python "%PY%" -Version %PYI_VERSION%
     if errorlevel 1 (
       echo.
       echo   Compiling the PyInstaller bootloader failed. Install "Build Tools for Visual Studio"
       echo   with the "Desktop development with C++" workload, or run:  build.bat prebuilt
       exit /b 1
     )
-    echo ok> "%VENV%\bootloader-from-source.ok"
+    echo ok> "%VENV%\bootloader-%PYI_VERSION%.ok"
   )
 )
 

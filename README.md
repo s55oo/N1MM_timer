@@ -94,7 +94,7 @@ These measures keep Microsoft Defender and other antivirus tools from flagging t
 
 | Measure | Why |
 |---|---|
-| PyInstaller **bootloader compiled from source** | The prebuilt bootloader is shared by every PyInstaller app, including malware, so heuristics key on it |
+| PyInstaller **bootloader compiled from source**, verified to differ from the prebuilt one | The prebuilt bootloader is shared by every PyInstaller app, including malware, so heuristics key on it |
 | **One-folder** build, not `--onefile` | No unpacking of a payload into `%TEMP%` at every start |
 | **No UPX** | Packed executables are a classic heuristic trigger |
 | **VERSIONINFO** resource (company, product, version) | The exe isn't anonymous |

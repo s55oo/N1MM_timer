@@ -24,7 +24,7 @@ jobs:
   windows:
     runs-on: windows-latest
     env:
-      PYI_SPEC: "pyinstaller>=6.11,<7"
+      PYI_VERSION: "6.22.3"
       SIGN_PFX_BASE64: ${{ secrets.SIGN_PFX_BASE64 }}
       SIGN_PFX_PASSWORD: ${{ secrets.SIGN_PFX_PASSWORD }}
     steps:
@@ -48,13 +48,11 @@ jobs:
       - name: Unit tests
         run: python -m unittest discover -s tests -t . -v
 
-      - name: Install PyInstaller with bootloader compiled from source
+      - name: PyInstaller with bootloader compiled from source (verified)
         shell: pwsh
-        env:
-          PYINSTALLER_COMPILE_BOOTLOADER: "1"
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install --no-binary=pyinstaller "$env:PYI_SPEC"
+          python -m pip install --upgrade pip setuptools wheel
+          ./packaging/build_bootloader.ps1 -Python python -Version $env:PYI_VERSION
           python -m PyInstaller --version
 
       - name: Build (one-folder, no UPX, version resource)
@@ -69,6 +67,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "--help failed" }
           & dist\N1MM_timer\N1MM_timer_console.exe --check tests\data\sample_cqww_ms.cbr
           if ($LASTEXITCODE -ne 1) { throw "expected 2 faults (exit 1), got exit $LASTEXITCODE" }
+          exit 0
 
       - name: Authenticode signing (only if SIGN_PFX_BASE64 secret is set)
         if: env.SIGN_PFX_BASE64 != ''
@@ -85,6 +84,7 @@ jobs:
           & $signtool.FullName verify /pa $exes.FullName
           if ($LASTEXITCODE -ne 0) { throw "signature verification failed" }
           Remove-Item $pfx
+          exit 0
 
       - name: Microsoft Defender scan
         shell: pwsh
@@ -98,6 +98,7 @@ jobs:
             2 { throw "Defender reported a threat in the build output – not publishing" }
             default { Write-Warning "Defender scan could not run on this runner (exit $LASTEXITCODE)" }
           }
+          exit 0
 
       - name: Package and hash
         shell: pwsh
