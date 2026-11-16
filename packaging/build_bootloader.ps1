@@ -21,7 +21,7 @@ function Invoke-Native([string]$what) {
 }
 
 Write-Host "== downloading PyInstaller $Version source"
-& $Python -m pip download --no-binary=:all: --no-deps --no-build-isolation "pyinstaller==$Version" -d $work
+& $Python -m pip download --no-binary=:all: --no-deps "pyinstaller==$Version" -d $work
 Invoke-Native "pip download sdist"
 $sdist = Get-ChildItem $work -Filter "pyinstaller-$Version.tar.gz" | Select-Object -First 1
 tar -xzf $sdist.FullName -C $work
