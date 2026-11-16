@@ -41,7 +41,8 @@ PingPong interface.
 **One port, one program.** Windows hands each N1MM packet on a port to only one program. If
 another program on the timer PC already listens on 12063, the timer says so (red, top of the
 window) instead of silently missing packets. Then give the timer another port
-(`[udp] port = 12064`, several allowed: `12063, 12064`) and add that port to N1MM's lines.
+(`[udp] port = 12065`, several allowed: `12063, 12065`) and add that port to N1MM's lines.
+Upgrading from 0.1.0? Its `n1mm_timer.ini` still says `port = 12064`; change it to 12063.
 
 Try it without N1MM:
 
@@ -107,9 +108,13 @@ including edits and deletes.
    fault list with every QSO a log checker would remove, e.g.
    `11 QSOs on 20 m (09:52:39–09:58:58) would be removed`. The window flashes red and beeps
    until someone clicks **Acknowledge**.
-3. **PingPong, later.** Passing FAULTs to every PingPong lamp on the network is prepared
-   (`[pingpong] enabled = false`, see DESIGN.md *PingPong interface*). It stays off until it
-   is tested. For now everything shows only in the timer's window.
+3. **BAND VIOLATION on every PingPong screen** (PingPong v1.117 or newer). Every FAULT that is
+   not acknowledged goes to the PingPong lamp on the timer PC (UDP `127.0.0.1:46071`). That lamp
+   passes it on to every lamp and the Overview, which show a red footer, e.g.
+   `BAND VIOLATION: RUN 20→15 m 14:29 – 3 QSOs`, with `· YOUR STATION` on the station that
+   logged it. **Acknowledge** in the timer and it disappears everywhere within 2 s. Run the timer
+   on the **PingPong master PC**. On by default (`[pingpong_alert] enabled = true`); with no
+   PingPong running it's harmless. Details: [docs/PINGPONG_INTERFACE.md](docs/PINGPONG_INTERFACE.md).
 
 **INFO for the other stations** needs their radio data. Each N1MM sends only its own radio's
 band, so add `<timer PC IP>:12063` (or your subnet broadcast, e.g. `192.168.1.255:12063`) to the
@@ -154,7 +159,7 @@ This was checked against two real 2026 logs: 9A7A CQ WW SSB Multi-Single (3 ten-
 | `n1mm_timer/store.py` | SQLite ledger `timer.db` (survives restarts) |
 | `n1mm_timer/cabrillo.py` | Cabrillo reader (`--check`, gap-filling import) |
 | `n1mm_timer/app.py` | Tk window: signal tiles, warnings, faults, acknowledge, flash + beep |
-| `n1mm_timer/pingpong.py` | phase 2: JSON status for PingPong (`[pingpong] enabled = true`) |
+| `n1mm_timer/pingpong.py` | BAND VIOLATION alerts to PingPong (interface v1, port 46071) |
 | `tools/simulate_n1mm.py` | fake N1MM packets for testing |
 | `CHANGELOG.md` | what changed in each release |
 

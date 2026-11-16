@@ -61,11 +61,14 @@ skip_before_start = true
 [alerts]
 sound = true
 
-[pingpong]
-; phase 2 – JSON status datagrams for PingPong (see DESIGN.md)
-enabled = false
+[pingpong_alert]
+; BAND VIOLATION on every PingPong screen (PingPong v1.117+, interface v1):
+; unacknowledged faults go to the PingPong lamp on THIS PC, which passes them on to all
+; lamps and the Overview. Nothing listening there is harmless.
+enabled = true
 host = 127.0.0.1
-port = 12065
+port = 46071
+ttl_s = 10
 """
 
 

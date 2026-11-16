@@ -38,9 +38,10 @@ class App:
                                   cp.get("udp", "bind")).start()
         self.db_thread = self.watcher.start_db_poller()
         self.sender = None
-        if cp.getboolean("pingpong", "enabled"):
+        if cp.getboolean("pingpong_alert", "enabled"):
             from .pingpong import Sender
-            self.sender = Sender(cp.get("pingpong", "host"), cp.getint("pingpong", "port"))
+            self.sender = Sender(cp.get("pingpong_alert", "host"), cp.getint("pingpong_alert", "port"),
+                                 cp.getint("pingpong_alert", "ttl_s"))
         self.flash_on = False
         self.open_faults = 0
         self.tick_n = 0
@@ -236,7 +237,8 @@ class App:
         err = ("  ⚠ " + " | ".join(errs)) if errs else ""
         self.l_info.config(text=f"N1MM contest: {snap.contest_name or '?'}  →  {prof.title if prof else 'no profile'}"
                                 f"   |   UDP {self.listener.describe()}: {snap.packets} packets, {age}"
-                                f"   |   {snap.qso_count} QSOs{err}")
+                                f"   |   {snap.qso_count} QSOs"
+                                f"   |   {self.sender.describe() if self.sender else 'PingPong alerts off'}{err}")
         s = self.watcher.settings
         if self.watcher.db_status:
             dbtxt = self.watcher.db_status
@@ -280,8 +282,8 @@ class App:
             self.tree.delete(iid)
 
         self.tick_n += 1
-        if self.sender and (self.tick_n % 2 == 0 or snap.new_faults):
-            self.sender.send(snap)
+        if self.sender:
+            self.sender.tick(snap)
 
     def _stations(self, snap, now):
         existing = set(self.st_tree.get_children())

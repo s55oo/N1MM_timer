@@ -105,9 +105,11 @@ def console(cp) -> int:
     lst = Listeners(parse_ports(cp.get("udp", "port")), w.handle_packet, cp.get("udp", "bind")).start()
     w.start_db_poller()
     sender = None
-    if cp.getboolean("pingpong", "enabled"):
+    if cp.getboolean("pingpong_alert", "enabled"):
         from .pingpong import Sender
-        sender = Sender(cp.get("pingpong", "host"), cp.getint("pingpong", "port"))
+        sender = Sender(cp.get("pingpong_alert", "host"), cp.getint("pingpong_alert", "port"),
+                        cp.getint("pingpong_alert", "ttl_s"))
+        print("  " + sender.describe())
     print(f"N1MM_timer {__version__} listening on UDP {lst.describe()} (Ctrl+C to stop)")
     for e in lst.errors():
         print("ERROR:", e)
@@ -133,7 +135,7 @@ def console(cp) -> int:
                     print(f"[{rules_utcnow():%H:%M:%S}z] INFO {st}: {text}")
             last_warn = {st: _no_countdown(t) for st, _, t in snap.warnings}
             if sender:
-                sender.send(snap)
+                sender.tick(snap)
     except KeyboardInterrupt:
         lst.stop()
     return 0

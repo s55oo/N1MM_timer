@@ -12,7 +12,7 @@ closed: the watcher logic lives here, and PingPong only shows the warnings.
 | 1a | Read the N1MM contest database directly (live polling + `--db` log check) | this version |
 | 1b | `--check` a Cabrillo log after the contest (or bootstrap the ledger from one) | this version |
 | 1c | One PC: follow the log N1MM has open (Application Info), Stations overview, UDP 12063 | 0.2.0 |
-| 2 | Push faults and live status to PingPong so the lamps can flash | JSON-over-UDP output already here (off by default); PingPong side still to do |
+| 2 | BAND VIOLATION on every PingPong screen | 0.3.0 + PingPong v1.117 (interface v1, UDP 127.0.0.1:46071) |
 
 The tool is **advisory only**. It never keys, blocks or edits anything in N1MM
 and never writes N1MM's database.
@@ -26,7 +26,7 @@ and never writes N1MM's database.
                                       ├─ store.py   SQLite ledger (timer.db), keyed by N1MM QSO GUID
                                       ├─ rules.py   full re-evaluation on every change → faults + status
                                       ├─ app.py     Tk window, red flash + beep on new fault, acknowledge
-                                      └─ pingpong.py  (phase 2) JSON status to PingPong
+                                      └─ pingpong.py  BAND VIOLATION → PingPong lamp (127.0.0.1:46071)
 ```
 
 N1MM setup on **every** networked PC: *Config → Configure Ports… → Broadcast
@@ -174,33 +174,12 @@ QSOs logged while it was down are missing. Importing the Cabrillo file (or
 N1MM re-broadcasting) fills the gap. Nothing proves that every UDP packet
 arrived, so the window shows the packet count and the age of the last packet.
 
-## Phase 2 – PingPong interface (proposal)
+## Phase 2 – PingPong interface (done in 0.3.0)
 
-When `[pingpong] enabled = true`, every 2 s and on every change the watcher
-sends one UDP datagram of UTF-8 JSON to `host:port`:
-
-```json
-{
-  "type": "n1mm_timer.status", "version": 1, "seq": 1234,
-  "sent_utc": "2026-11-28T14:21:05Z",
-  "profile": "CQWW-CW-MS",
-  "signals": [
-    {"signal": "RUN",  "band": "40", "rule": "TEN_MIN", "free_at": "2026-11-28T14:25:00Z"},
-    {"signal": "MULT", "band": "20", "rule": "TEN_MIN", "free_at": null}
-  ],
-  "faults": [
-    {"id": "TEN_MIN:{guid}", "kind": "TEN_MIN", "signal": "RUN",
-     "time": "2026-11-28T14:19:30Z", "station": "RUN-PC", "text": "…", "acked": false}
-  ],
-  "warnings": [{"station": "MULT-PC", "signal": "MULT", "text": "…"}]
-}
-```
-
-PingPong only has to listen on that port, flash the lamps while
-`faults[*].acked == false` (or only on the station named in the fault), and
-show `warnings` on the matching station's lamp. Acknowledgement stays in the
-watcher for now. A later version can accept an `ack` datagram back over
-PingPong's existing authenticated command channel.
+Unacknowledged faults go to the PingPong lamp on the same PC (UDP `127.0.0.1:46071`) as a
+small JSON message every 2 s and at once on change. PingPong v1.117 relays it over its signed
+network, and every lamp and the Overview shows `BAND VIOLATION: …` in its footer. The full
+specification, port map and PingPong's limits are in [docs/PINGPONG_INTERFACE.md](docs/PINGPONG_INTERFACE.md).
 
 ## Not covered (same limits as PR #3)
 

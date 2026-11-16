@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 – 2026-11-16
+- **BAND VIOLATION on every PingPong screen** (PingPong v1.117+). Unacknowledged faults go to
+  the PingPong lamp on the same PC (UDP 127.0.0.1:46071, interface v1), every 2 s and at once
+  on change. Acknowledging in the timer clears it everywhere. On by default
+  (`[pingpong_alert]`). The old draft output (`[pingpong]`, port 12065) is removed.
+- Tested against a copy of PingPong's own receiver (`tests/compat/pingpong_bandalert.py`).
+- Docs: `docs/PINGPONG_INTERFACE.md` with the station's port map. The example second UDP port
+  is now 12065 (12064 was 0.1.0's default).
+
 ## 0.2.1 – 2026-11-16
 - Docs: contest workflow (INFO before a faulty entry, FAULT after it, PingPong later), INFO
   for other stations, local-only mode (`[udp] bind = 127.0.0.1`), test before the contest.
