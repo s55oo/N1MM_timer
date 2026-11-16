@@ -114,3 +114,80 @@ class TestN1mmDb(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def appinfo(dbname, contestnr="1", station="RUN-PC"):
+    return (f'<?xml version="1.0" encoding="utf-8"?><AppInfo><app>N1MM</app><dbname>{dbname}</dbname>'
+            f"<contestnr>{contestnr}</contestnr><contestname>CQWWCW</contestname>"
+            f"<StationName>{station}</StationName></AppInfo>").encode()
+
+
+class TestFollowOpenLog(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.a = os.path.join(self.dir, "S50A_CQWWCW.s3db")
+        self.b = os.path.join(self.dir, "TEST.s3db")
+        for p in (self.a, self.b):
+            db = sqlite3.connect(p)
+            db.executescript(DDL)
+            db.close()
+        self.dba, self.dbb = sqlite3.connect(self.a), sqlite3.connect(self.b)
+        qso(self.dba, "a1", "2026-11-28 12:00:00", 7.0, "K1AR")
+        qso(self.dbb, "b1", "2026-11-28 12:00:00", 14.0, "W1AW")
+        qso(self.dbb, "b2", "2026-11-28 12:01:00", 21.0, "N2IC")
+
+    def watcher(self, store=None):
+        return Watcher(store or Store(":memory:"), Settings(db_follow=True, db_dirs=[self.dir]))
+
+    def test_follows_appinfo_full_path_and_switches(self):
+        w = self.watcher()
+        w.handle_packet(appinfo(self.a), ("127.0.0.1", 5000))
+        w.sync_db()
+        self.assertEqual((w.settings.db_path, w.settings.db_contest_nr), (self.a, 1))
+        self.assertEqual(w.follow_source, "N1MM App Info")
+        self.assertEqual(w.snapshot().qso_count, 1)
+        w.handle_packet(appinfo(self.b), ("127.0.0.1", 5000))     # operator opened another log
+        w.sync_db()
+        self.assertEqual(w.settings.db_path, self.b)
+        self.assertEqual(w.snapshot().qso_count, 2)              # fresh ledger, only TEST.s3db
+        self.assertIn("following N1MM (N1MM App Info)", w.db_status)
+
+    def test_bare_file_name_is_looked_up(self):
+        w = self.watcher()
+        w.handle_packet(appinfo("TEST.s3db"), ("127.0.0.1", 5000))
+        self.assertEqual(w.settings.db_path, self.b)
+
+    def test_remote_appinfo_ignored(self):
+        w = self.watcher()
+        w.handle_packet(appinfo(self.a), ("203.0.113.9", 5000))
+        self.assertEqual(w.settings.db_path, "")
+
+    def test_unknown_db_reported(self):
+        w = self.watcher()
+        w.handle_packet(appinfo("NOPE.s3db"), ("127.0.0.1", 5000))
+        self.assertIn("not found on this PC", w.db_status)
+
+    def test_guess_newest_until_appinfo(self):
+        os.utime(self.a, (1, 1))                                  # TEST.s3db is the newest
+        os.utime(self.b, None)
+        w = self.watcher()
+        w.sync_db()
+        self.assertEqual(w.settings.db_path, self.b)
+        self.assertTrue(w.follow_source.startswith("guessed"))
+        w.handle_packet(appinfo(self.a), ("127.0.0.1", 5000))     # App Info wins
+        w.sync_db()
+        self.assertEqual((w.settings.db_path, w.follow_source), (self.a, "N1MM App Info"))
+
+    def test_admin_db_never_guessed(self):
+        admin = os.path.join(self.dir, "N1MM Admin.s3db")
+        db = sqlite3.connect(admin)
+        db.executescript(DDL)
+        db.close()
+        self.assertNotEqual(n1mmdb.newest_log([self.dir]), admin)
+
+    def test_restart_keeps_following(self):
+        path = os.path.join(self.dir, "ledger.db")
+        w = self.watcher(Store(path))
+        w.handle_packet(appinfo(self.a), ("127.0.0.1", 5000))
+        w2 = self.watcher(Store(path))
+        self.assertEqual(w2.settings.db_path, self.a)

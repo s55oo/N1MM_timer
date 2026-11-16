@@ -16,7 +16,7 @@ from datetime import datetime
 
 from . import __version__, cabrillo, config, rules
 from .core import Watcher
-from .n1mm import UdpListener
+from .n1mm import Listeners, parse_ports
 from .store import Store
 from .rules import utcnow as rules_utcnow
 
@@ -91,27 +91,35 @@ def check_db(path: str, contest_nr=None, profile_key=None, m2_source=None, list_
     return 1 if snap.faults else 0
 
 
+def _no_countdown(text: str) -> str:
+    import re
+    return re.sub(r"\(\d+:\d+ left\)", "", text)
+
+
 def console(cp) -> int:
     _utf8_console()
     store = Store(os.path.join(config.app_dir(), "timer.db"))
     w = Watcher(store, config.settings(cp))
-    lst = UdpListener(cp.getint("udp", "port"), w.handle_packet, cp.get("udp", "bind"))
-    lst.start()
+    lst = Listeners(parse_ports(cp.get("udp", "port")), w.handle_packet, cp.get("udp", "bind")).start()
     w.start_db_poller()
     sender = None
     if cp.getboolean("pingpong", "enabled"):
         from .pingpong import Sender
         sender = Sender(cp.get("pingpong", "host"), cp.getint("pingpong", "port"))
-    print(f"N1MM_timer {__version__} listening on UDP {lst.port} (Ctrl+C to stop)")
+    print(f"N1MM_timer {__version__} listening on UDP {lst.describe()} (Ctrl+C to stop)")
+    for e in lst.errors():
+        print("ERROR:", e)
+    shown_errors = set(lst.errors())
     last_warn = {}
     last_db = ""
     try:
         while True:
             w.dirty.wait(2.0)
             w.dirty.clear()
-            if lst.error:
-                print("ERROR:", lst.error)
-                lst.error = None
+            for e in lst.errors():
+                if e not in shown_errors:
+                    print("ERROR:", e)
+                    shown_errors.add(e)
             snap = w.snapshot()
             for f in snap.new_faults:
                 print(f"\a[{rules_utcnow():%H:%M:%S}z] FAULT {f.kind}: {f.text}")
@@ -119,9 +127,9 @@ def console(cp) -> int:
                 print("  ", w.db_status)
                 last_db = w.db_status
             for st, sig, text in snap.warnings:
-                if last_warn.get(st) != text:
+                if last_warn.get(st) != _no_countdown(text):
                     print(f"[{rules_utcnow():%H:%M:%S}z] warning {st}: {text}")
-            last_warn = {st: t for st, _, t in snap.warnings}
+            last_warn = {st: _no_countdown(t) for st, _, t in snap.warnings}
             if sender:
                 sender.send(snap)
     except KeyboardInterrupt:

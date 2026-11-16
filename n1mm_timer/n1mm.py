@@ -1,6 +1,7 @@
 """Parsing of N1MM Logger+ external UDP broadcasts (XML) and a UDP listener."""
 from __future__ import annotations
 
+import re
 import socket
 import threading
 import xml.etree.ElementTree as ET
@@ -149,25 +150,47 @@ def radio_band(fields: dict) -> Optional[str]:
 
 
 class UdpListener(threading.Thread):
-    """Receives datagrams and hands (bytes, (ip, port)) to a callback."""
+    """Receives datagrams and hands (bytes, (ip, port)) to a callback.
+
+    The port is bound exclusively: if another program on this PC already listens on it,
+    Windows would hand each N1MM packet to only ONE of the two programs, so instead of
+    silently missing packets we refuse the port and report it in `error`.
+    """
 
     def __init__(self, port: int, callback: Callable[[bytes, tuple], None], bind: str = "0.0.0.0"):
-        super().__init__(daemon=True, name="n1mm-udp")
+        super().__init__(daemon=True, name=f"n1mm-udp-{port}")
         self.port, self.bind, self.callback = port, bind, callback
         self._stop = threading.Event()
         self.sock: Optional[socket.socket] = None
         self.error: Optional[str] = None
+        self.bound = threading.Event()
+        self.packets = 0
+
+    def _open(self) -> socket.socket:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):          # Windows
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        # no SO_REUSEADDR anywhere: a shared UDP port splits N1MM's packets
+        s.bind((self.bind, self.port))
+        s.settimeout(0.5)
+        return s
 
     def run(self):
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind((self.bind, self.port))
-            s.settimeout(0.5)
+            s = self._open()
             self.sock = s
         except OSError as e:
-            self.error = f"Cannot listen on UDP {self.port}: {e}"
+            busy = getattr(e, "winerror", None) in (10048, 10013) or e.errno in (98, 48, 10048)
+            if busy:
+                self.error = (f"UDP {self.port} is already used by another program on this PC - "
+                              f"N1MM packets would be split between them. Close that program or set "
+                              f"another port in n1mm_timer.ini [udp] port and add it to N1MM's "
+                              f"Broadcast Data lines.")
+            else:
+                self.error = f"Cannot listen on UDP {self.port}: {e}"
+            self.bound.set()
             return
+        self.bound.set()
         while not self._stop.is_set():
             try:
                 data, addr = s.recvfrom(65535)
@@ -175,6 +198,7 @@ class UdpListener(threading.Thread):
                 continue
             except OSError:
                 break
+            self.packets += 1
             try:
                 self.callback(data, addr)
             except Exception as e:  # never let one bad packet kill the listener
@@ -183,3 +207,45 @@ class UdpListener(threading.Thread):
 
     def stop(self):
         self._stop.set()
+
+
+def parse_ports(value: str) -> list:
+    """'12060' or '12060, 12064' -> [12060, 12064] (1..65535, no duplicates)."""
+    out = []
+    for part in re.split(r"[,\s;]+", str(value or "").strip()):
+        if not part:
+            continue
+        p = int(part)
+        if not 0 < p < 65536:
+            raise ValueError(f"bad UDP port {p}")
+        if p not in out:
+            out.append(p)
+    return out or [12060]
+
+
+class Listeners:
+    """One UdpListener per configured port."""
+
+    def __init__(self, ports, callback, bind="0.0.0.0"):
+        self.items = [UdpListener(p, callback, bind) for p in ports]
+
+    def start(self):
+        for l in self.items:
+            l.start()
+        for l in self.items:
+            l.bound.wait(2.0)
+        return self
+
+    def stop(self):
+        for l in self.items:
+            l.stop()
+
+    @property
+    def ports(self) -> list:
+        return [l.port for l in self.items]
+
+    def errors(self) -> list:
+        return [l.error for l in self.items if l.error]
+
+    def describe(self) -> str:
+        return ", ".join(f"{l.port}{' ✖' if l.error and l.sock is None else ''}" for l in self.items)

@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 import unittest
 from datetime import datetime
 
@@ -185,3 +186,64 @@ class TestCabrillo(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def radio_full(station, freq_10hz, radionr="1", running="True", tx="False", op="S55OO", caption=""):
+    return f"""<?xml version="1.0" encoding="utf-8"?>
+<RadioInfo><app>N1MM</app><StationName>{station}</StationName><RadioNr>{radionr}</RadioNr>
+<Freq>{freq_10hz}</Freq><TXFreq>{freq_10hz}</TXFreq><Mode>CW</Mode><OpCall>{op}</OpCall>
+<IsRunning>{running}</IsRunning><IsTransmitting>{tx}</IsTransmitting>
+<FunctionKeyCaption>{caption}</FunctionKeyCaption></RadioInfo>""".encode()
+
+
+class TestStations(unittest.TestCase):
+    def setUp(self):
+        self.w = Watcher(Store(":memory:"), Settings(category="MS"))
+
+    def test_radio_and_log_rows(self):
+        w = self.w
+        w.handle_packet(contact("g1", "2026-11-28 12:00:00", "7", "K1AR", station="RUN-PC"))
+        w.handle_packet(contact("g2", "2026-11-28 12:01:00", "14", "JA1XX", station="MULT-PC", is_run="False"))
+        w.handle_packet(radio_full("RUN-PC", 702500, tx="True", caption="F1 CQ"))
+        rows = {r.station: r for r in w.snapshot(datetime(2026, 11, 28, 12, 3)).stations}
+        run = rows["RUN-PC"]
+        self.assertEqual((run.band, run.freq_khz, run.signal, run.transmitting, run.tx_caption, run.op),
+                         ("40", 7025.0, "RUN", True, "F1 CQ", "S55OO"))
+        self.assertEqual((run.rule_level, run.qsos, run.last_call), ("hold", 1, "K1AR"))
+        self.assertIn("held on 40 m – 7:00", run.rule_text)
+        mult = rows["MULT-PC"]                       # known from the log only
+        self.assertIsNone(mult.seen_s)
+        self.assertEqual((mult.signal, mult.qsos), ("MULT", 1))
+
+    def test_warning_on_row(self):
+        w = self.w
+        w.handle_packet(contact("g1", "2026-11-28 12:00:00", "7", "K1AR", station="RUN-PC"))
+        w.handle_packet(radio_full("RUN-PC", 1402500))
+        run = [r for r in w.snapshot(datetime(2026, 11, 28, 12, 3)).stations if r.station == "RUN-PC"][0]
+        self.assertIn("A QSO now = breach", run.warning)
+
+    def test_hourly_text_and_levels(self):
+        w = Watcher(Store(":memory:"), Settings(category="MS", profile="CQWPX-CW-MS"))
+        for i in range(10):     # 9 changes
+            w.handle_packet(contact(f"x{i}", f"2026-05-30 12:{i:02d}:00", "7" if i % 2 else "14", f"C{i}",
+                                    contest="CQWPXCW"))
+        r = [r for r in w.snapshot(datetime(2026, 5, 30, 12, 30)).stations if r.station == "RUN-PC"][0]
+        self.assertEqual(r.rule_level, "last")
+        self.assertIn("9/10 changes 12z (entry) – 1 left", r.rule_text)
+
+    def test_m2_radio_uses_last_qso_tx(self):
+        w = Watcher(Store(":memory:"), Settings(category="M2"))   # default run1run2
+        w.handle_packet(contact("a", "2026-11-28 12:00:00", "21", "X", station="PCB", radionr="1")
+                        .replace(b"<run1run2>1</run1run2>", b"<run1run2>2</run1run2>"))
+        w.handle_packet(radio_full("PCB", 2102500))
+        r = [r for r in w.snapshot(datetime(2026, 11, 28, 12, 5)).stations if r.station == "PCB"][0]
+        self.assertEqual(r.signal, "TX2")
+
+    def test_stale_radio(self):
+        w = self.w
+        w.handle_packet(radio_full("RUN-PC", 702500))
+        key = ("RUN-PC", "1")
+        f, _ = w.radios[key]
+        w.radios[key] = (f, time.monotonic() - 60)
+        r = w.snapshot().stations[0]
+        self.assertTrue(r.stale)

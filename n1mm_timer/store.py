@@ -86,6 +86,11 @@ class Store:
                 (call, band, lo, hi)).fetchone()
             return r is not None
 
+    def clear_qsos(self):
+        with self.lock:
+            self.db.execute("DELETE FROM qsos")
+            self.db.commit()
+
     def clear(self):
         with self.lock:
             self.db.executescript("DELETE FROM qsos; DELETE FROM acks;")

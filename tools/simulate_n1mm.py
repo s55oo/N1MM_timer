@@ -2,7 +2,7 @@
 
   python tools/simulate_n1mm.py                 CQ WW CW MS scenario with a 10-minute breach
   python tools/simulate_n1mm.py --speed 60      run 60x faster than real time
-  python tools/simulate_n1mm.py --host 192.168.1.20 --port 12064
+  python tools/simulate_n1mm.py --host 192.168.1.20 --port 12060
 
 Timestamps are 'now' (UTC) shifted by the scenario offsets, so live countdowns work.
 """
@@ -48,7 +48,7 @@ def radio(station, band, running):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=12064)
+    ap.add_argument("--port", type=int, default=12060)
     ap.add_argument("--speed", type=float, default=30.0, help="time compression factor")
     ap.add_argument("--contest", default="CQWWCW")
     a = ap.parse_args()

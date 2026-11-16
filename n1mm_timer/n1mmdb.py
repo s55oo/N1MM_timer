@@ -125,3 +125,66 @@ def read_qsos(db: sqlite3.Connection, info: ContestInfo, skip_before_start: bool
             is_run=_flag(r["IsRunQSO"]), is_mult=(any(known) if known else None),
             contest=info.name, operator=r["Operator"] or ""))
     return out, deleted, skipped
+
+
+# ---- following the log N1MM has open on this PC ---------------------------------------
+NOT_LOGS = ("n1mm admin", "n1mm packet spots")
+
+
+def default_db_dirs(extra=()) -> list:
+    """Where N1MM keeps its databases on this PC (first existing ones win)."""
+    home = os.path.expanduser("~")
+    cands = list(extra) + [
+        os.path.join(home, "Documents", "N1MM Logger+", "Databases"),
+        os.path.join(home, "OneDrive", "Documents", "N1MM Logger+", "Databases"),
+        os.path.join(home, "OneDrive", "Dokumenti", "N1MM Logger+", "Databases"),
+    ]
+    out = []
+    for d in cands:
+        if d and os.path.isdir(d) and d not in out:
+            out.append(d)
+    return out
+
+
+def resolve_dbname(dbname: str, dirs=()) -> Optional[str]:
+    """N1MM's AppInfo <dbname> as a usable local path: absolute path as given, or a bare
+    file name looked up in the N1MM database folders."""
+    name = (dbname or "").strip().strip('"')
+    if not name:
+        return None
+    if os.path.isabs(name) or os.sep in name or "/" in name:
+        return name if os.path.isfile(name) else None
+    for d in default_db_dirs(dirs):
+        p = os.path.join(d, name)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def _is_log(path: str) -> bool:
+    if os.path.basename(path).lower().startswith(NOT_LOGS):
+        return False
+    try:
+        db = connect(path)
+        try:
+            names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        finally:
+            db.close()
+        return {"DXLOG", "ContestInstance"} <= names
+    except Exception:
+        return False
+
+
+def newest_log(dirs=()) -> Optional[str]:
+    """Best guess at the open log: the contest database written most recently
+    (N1MM writes through the -wal file, so its time counts too)."""
+    best, best_t = None, -1.0
+    for d in default_db_dirs(dirs):
+        for name in os.listdir(d):
+            if not name.lower().endswith(".s3db"):
+                continue
+            p = os.path.join(d, name)
+            t = max(os.path.getmtime(x) for x in (p, p + "-wal") if os.path.exists(x))
+            if t > best_t and _is_log(p):
+                best, best_t = p, t
+    return best

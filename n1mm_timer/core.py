@@ -1,6 +1,8 @@
 """Watcher: glue between N1MM packets, the ledger and the rule engine (no GUI)."""
 from __future__ import annotations
 
+import os
+import socket
 import threading
 import time
 from dataclasses import dataclass, field
@@ -18,12 +20,37 @@ class Settings:
     profile: str = "auto"          # profile key or "auto" (from N1MM contest name)
     category: str = "MS"           # MS or M2 (UDP has no category; the N1MM database has)
     m2_signal_source: str = "run1run2"  # run1run2 | station | radionr
-    db_path: str = ""              # N1MM .s3db to poll (empty = UDP only)
+    db_path: str = ""              # N1MM .s3db to poll (empty = UDP only, unless db_follow)
+    db_follow: bool = False        # follow the log N1MM has open on this PC (AppInfo / newest)
+    db_dirs: list = field(default_factory=list)   # extra folders with N1MM databases
     db_contest_nr: Optional[int] = None   # ContestNR in that database (None = latest with QSOs)
     db_poll_s: float = 5.0
     skip_before_start: bool = True # ignore DB QSOs outside StartDate .. +48 h
     allowed_ips: list = field(default_factory=list)
     station_names: list = field(default_factory=list)   # optional StationName allow list
+
+
+@dataclass
+class StationRow:
+    """One line of the Stations overview: an N1MM radio (RadioInfo) and/or a PC seen in the log."""
+    station: str
+    radionr: str = ""
+    op: str = ""
+    band: Optional[str] = None
+    mode: str = ""
+    freq_khz: Optional[float] = None
+    running: Optional[bool] = None       # N1MM Run (True) / S&P (False)
+    transmitting: bool = False
+    tx_caption: str = ""
+    signal: str = ""
+    rule_text: str = ""
+    rule_level: str = "none"             # ok | hold | last | full | none
+    warning: str = ""
+    qsos: int = 0
+    last_qso: Optional[datetime] = None
+    last_call: str = ""
+    seen_s: Optional[float] = None       # seconds since last RadioInfo; None = log only
+    stale: bool = False
 
 
 @dataclass
@@ -39,6 +66,7 @@ class Snapshot:
     last_packet_age: Optional[float]
     qso_count: int
     errors: list
+    stations: list = field(default_factory=list)   # list[StationRow]
 
 
 class Watcher:
@@ -59,6 +87,16 @@ class Watcher:
         self._db = None
         self._db_seen: dict = {}        # id -> row signature from last sync
         self._db_version = None
+        self.follow_source = ""          # "N1MM App Info" | "guessed: newest log" | ""
+        self._local_ips = self._my_ips()
+        self._local_ips_t = time.monotonic()
+        if settings.db_follow and not settings.db_path:
+            last = store.get_meta("followed_db")
+            if last and os.path.isfile(last):
+                settings.db_path = last
+                nr = store.get_meta("followed_contestnr")
+                settings.db_contest_nr = int(nr) if nr.isdigit() else None
+                self.follow_source = "guessed: last session"
 
     # ---- configuration --------------------------------------------------
     def profile(self) -> Optional[rules.Profile]:
@@ -113,6 +151,54 @@ class Watcher:
                 self.dirty.set()
             elif msg.kind == "app":
                 self._set_contest(msg.fields.get("contestname", ""))
+                if self.settings.db_follow and self._is_local(addr[0]):
+                    self._follow(msg.fields.get("dbname", ""), msg.fields.get("contestnr", ""),
+                                 "N1MM App Info")
+
+    # ---- following the open N1MM log -----------------------------------------
+    @staticmethod
+    def _my_ips() -> set:
+        ips = {"127.0.0.1", "::1", ""}
+        try:
+            ips.update(socket.gethostbyname_ex(socket.gethostname())[2])
+        except OSError:
+            pass
+        return ips
+
+    def _is_local(self, ip: str) -> bool:
+        if ip.startswith("127.") or ip in self._local_ips:
+            return True
+        if time.monotonic() - self._local_ips_t > 60:     # DHCP / VPN changes
+            self._local_ips, self._local_ips_t = self._my_ips(), time.monotonic()
+        return ip in self._local_ips
+
+    def _follow(self, dbname: str, contestnr: str, source: str) -> bool:
+        path = n1mmdb.resolve_dbname(dbname, self.settings.db_dirs)
+        if path is None:
+            if dbname:
+                self.db_status = f"N1MM has {dbname!r} open but it is not found on this PC"
+            return False
+        nr = int(contestnr) if str(contestnr).strip().isdigit() else None
+        s = self.settings
+        same = os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(s.db_path or "")) \
+            and (nr is None or nr == s.db_contest_nr)
+        if same:
+            if source != self.follow_source:
+                self.follow_source = source
+                self.store.set_meta("followed_source", source)
+            return False
+        with self.lock:
+            if s.db_path:                      # another log: start a fresh ledger
+                self.store.clear_qsos()
+                self.seen_faults = set(self.store.acked())
+            s.db_path, s.db_contest_nr = path, nr
+            self._db, self.db_info, self._db_seen, self._db_version = None, None, {}, None
+            self.follow_source = source
+            self.store.set_meta("followed_db", path)
+            self.store.set_meta("followed_contestnr", "" if nr is None else str(nr))
+            self.store.set_meta("followed_source", source)
+            self.dirty.set()
+        return True
 
     def _set_contest(self, name: str):
         if name and name != self.contest_name:
@@ -156,28 +242,83 @@ class Watcher:
                     if w:
                         warnings.append((f"{station} R{radionr}", sig, w))
             age = None if self.last_packet is None else time.monotonic() - self.last_packet
+            stations = self._stations(prof, res, q if prof is not None else [], warnings, now)
             return Snapshot(prof, self.contest_name, now, res, faults, new, warnings,
-                            self.packets, age, qcount, list(self.errors))
+                            self.packets, age, qcount, list(self.errors), stations)
 
     def _radio_signal(self, prof, station, radionr, fields, qsos) -> str:
-        """Which signal is this radio? MS: its last logged QSO's signal, else N1MM IsRunning."""
-        if prof.category == "M2":
-            src = self.settings.m2_signal_source
-            if src == "radionr":
-                return f"TX{radionr or '?'}"
-            if src == "run1run2":
-                return f"TX{fields.get('run1run2', '') or radionr or '?'}"
-            return (station or "?").upper()
+        """Which signal is this radio? The signal of this PC's latest logged QSO (N1MM's
+        RadioInfo carries no Run1/Run2), else MS: N1MM IsRunning; M2: the configured source."""
         mine = [q for q in qsos if q.station == station]
         if mine:
             return max(mine, key=lambda q: q.ts).signal
+        if prof.category == "M2":
+            src = self.settings.m2_signal_source
+            if src == "station":
+                return (station or "?").upper()
+            return f"TX{radionr or '?'}"
         running = n1mm._bool(fields.get("isrunning"))
         return rules.MULT if running is False else rules.RUN
+
+    def _rule_text(self, prof, res, signal, now):
+        key = rules.ALL if prof.entry_wide else signal
+        s = res.status.get(key)
+        if s is None or s.band is None:
+            return "no QSO yet", "none"
+        if prof.rule == rules.TEN_MIN:
+            if s.free_at and now < s.free_at:
+                left = int((s.free_at - now).total_seconds())
+                return f"held on {s.band} m – {left // 60}:{left % 60:02d}", "hold"
+            return f"free (on {s.band} m)", "ok"
+        rem = s.remaining()
+        lvl = "ok" if rem > 1 else "last" if rem == 1 else "full"
+        who = "entry" if prof.entry_wide else key
+        return f"{s.used_this_hour}/{s.limit} changes {now:%H}z ({who}) – {rem} left", lvl
+
+    def _stations(self, prof, res, qsos, warnings, now) -> list:
+        mono = time.monotonic()
+        rows = {}
+        by_pc = {}
+        for q in qsos:
+            by_pc.setdefault(q.station or "?", []).append(q)
+        warn_by = {st: text for st, _sig, text in warnings}
+        for (station, radionr), (f, t) in list(self.radios.items()):
+            try:
+                freq = float(f.get("txfreq") or f.get("freq") or 0) / 100.0 or None
+            except ValueError:
+                freq = None
+            r = StationRow(station or "?", radionr, f.get("opcall", ""), n1mm.radio_band(f),
+                           f.get("mode", ""), freq, n1mm._bool(f.get("isrunning")),
+                           bool(n1mm._bool(f.get("istransmitting"))), f.get("functionkeycaption", ""),
+                           seen_s=mono - t, stale=(mono - t) > self.RADIO_STALE_S)
+            r.warning = warn_by.get(f"{station} R{radionr}", "")
+            rows[(station, radionr)] = r
+        for pc in by_pc:
+            if not any(k[0] == pc for k in rows):
+                rows[(pc, "")] = StationRow(pc)
+        for (station, radionr), r in rows.items():
+            mine = by_pc.get(station, [])
+            r.qsos = len(mine)
+            if mine:
+                last = max(mine, key=lambda q: q.ts)
+                r.last_qso, r.last_call = last.ts, last.call
+            if prof is not None:
+                if r.seen_s is not None:
+                    r.signal = self._radio_signal(prof, station, radionr, self.radios[(station, radionr)][0], qsos)
+                elif mine:
+                    r.signal = max(mine, key=lambda q: q.ts).signal
+                if r.signal:
+                    r.rule_text, r.rule_level = self._rule_text(prof, res, r.signal, now)
+        return sorted(rows.values(), key=lambda r: (r.signal or "~", r.station, r.radionr))
 
     # ---- N1MM database ------------------------------------------------------
     def sync_db(self) -> str:
         """Bring the ledger in line with the N1MM database (adds, edits, deletes)."""
         s = self.settings
+        if s.db_follow and (not s.db_path or self.follow_source.startswith("guessed")):
+            guess = n1mmdb.newest_log(s.db_dirs)          # until N1MM's App Info tells us
+            if guess:
+                self._follow(guess, "", "guessed: newest log")
         if not s.db_path:
             return ""
         try:
@@ -223,11 +364,12 @@ class Watcher:
         if changed:
             self.dirty.set()
         extra = f", {skipped} outside contest period ignored" if skipped else ""
-        self.db_status = f"DB {info.label()}{extra}"
+        how = f" – following N1MM ({self.follow_source})" if s.db_follow and self.follow_source else ""
+        self.db_status = f"DB {os.path.basename(s.db_path)} {info.label()}{extra}{how}"
         return self.db_status
 
     def start_db_poller(self) -> Optional[threading.Thread]:
-        if not self.settings.db_path:
+        if not (self.settings.db_path or self.settings.db_follow):
             return None
 
         def loop():

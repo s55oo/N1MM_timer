@@ -11,6 +11,7 @@ closed: the watcher logic lives here, and PingPong only shows the warnings.
 | 1 | Listen to N1MM directly, evaluate the rules, show faults and live warnings in its own window (with sound) | this version |
 | 1a | Read the N1MM contest database directly (live polling + `--db` log check) | this version |
 | 1b | `--check` a Cabrillo log after the contest (or bootstrap the ledger from one) | this version |
+| 1c | One PC: follow the log N1MM has open (Application Info), Stations overview, UDP 12060 | 0.2.0 |
 | 2 | Push faults and live status to PingPong so the lamps can flash | JSON-over-UDP output already here (off by default); PingPong side still to do |
 
 The tool is **advisory only**. It never keys, blocks or edits anything in N1MM
@@ -20,7 +21,7 @@ and never writes N1MM's database.
 
 ```
  N1MM PC #1 ─┐  contactinfo / contactreplace / contactdelete / RadioInfo / AppInfo
- N1MM PC #2 ─┼──── UDP XML ───►  N1MM_timer  (port 12064 by default)
+ N1MM PC #2 ─┼──── UDP XML ───►  N1MM_timer  (port 12060 by default)
  N1MM PC #n ─┘                       │
                                       ├─ store.py   SQLite ledger (timer.db), keyed by N1MM QSO GUID
                                       ├─ rules.py   full re-evaluation on every change → faults + status
@@ -30,7 +31,7 @@ and never writes N1MM's database.
 
 N1MM setup on **every** networked PC: *Config → Configure Ports… → Broadcast
 Data*: tick **Contacts** and **Radio** (and **App Info**) and add
-`<watcher-ip>:12064` to each address (N1MM accepts several space-separated
+`<timer-ip>:12060` (`127.0.0.1:12060` on the timer PC itself) to each address (N1MM accepts several space-separated
 destinations, so PingPong's own entries stay as they are).
 
 ### N1MM database source
@@ -48,6 +49,23 @@ The watcher opens the file `mode=ro`, checks `PRAGMA data_version` every 5 s, an
 when N1MM has committed something. It then reconciles the ledger: adds, edits, and deletes
 (rows gone or moved to −1). QSOs outside `StartDate … +48 h` are ignored by default (test QSOs).
 It has to run on an N1MM PC, because SQLite in WAL mode can't be read safely over SMB.
+
+### Following the open log
+
+N1MM's *Application Info* packet carries `<dbname>` (a full path or only the file name) and
+`<contestnr>`. When one arrives from this PC (a loopback or local address), the timer
+resolves the name against the N1MM database folders and points the database poller at that
+file and contest. Opening another log in N1MM switches the timer to it, with a fresh ledger;
+acknowledgements are kept. Until such a packet arrives, the most recently written contest
+database (`.s3db` or its `-wal`, never *N1MM Admin* / *Packet Spots*) is used and marked
+*guessed*. The followed log is remembered for the next start.
+
+### UDP port
+
+Default 12060. Several ports are allowed. Each port is bound exclusively (`SO_EXCLUSIVEADDRUSE`
+on Windows, no `SO_REUSEADDR`). Windows delivers a unicast datagram to only one of several
+sockets sharing a port, so a shared port means silently missing packets. The timer refuses
+the port and says which one instead.
 
 ### Why full re-evaluation
 

@@ -10,8 +10,12 @@ from .core import Settings
 DEFAULT_INI = """\
 ; N1MM_timer configuration
 [udp]
-; N1MM: Config > Configure Ports > Broadcast Data – add <this-pc-ip>:12064 to Contacts and Radio
-port = 12064
+; UDP port(s) N1MM sends to, e.g. 12060 or 12060, 12064.
+; On EVERY N1MM PC: Config > Configure Ports > Broadcast Data – add <this-pc-ip>:<port>
+; (or your subnet broadcast, e.g. 192.168.1.255:12060) to the Radio, Contacts and
+; Application Info lines. 127.0.0.1 reaches only programs on that same PC.
+; The port must not be used by another program on this PC.
+port = 12060
 bind = 0.0.0.0
 ; optional comma-separated source IP allow list (empty = accept all)
 allowed_ips =
@@ -33,11 +37,17 @@ category = MS
 m2_signal_source = run1run2
 
 [n1mm_db]
-; N1MM contest database to read directly, e.g.
+; auto  = follow the log N1MM has open on THIS PC (from N1MM's Application Info packet –
+;         add 127.0.0.1:<udp port> to N1MM's Broadcast Data > Application Info line;
+;         until it arrives, the most recently written log database is used)
+; empty = don't read the database (UDP only)
+; or a fixed database file, e.g.
 ; C:\\Users\\<you>\\Documents\\N1MM Logger+\\Databases\\S50A_CQWWCW_2026.s3db
 ; Read-only. Use it on a PC where N1MM runs (not over a network share).
-path =
-; ContestNR inside the database (empty = most recent contest that has QSOs)
+path = auto
+; extra folders that hold N1MM databases (comma separated), if not in Documents\\N1MM Logger+\\Databases
+folders =
+; ContestNR inside the database (empty = most recent contest that has QSOs; with auto, N1MM's own)
 contest_nr =
 poll_seconds = 5
 ; ignore QSOs outside the contest's StartDate .. +48 h (test QSOs before the start)
@@ -105,7 +115,10 @@ def settings(cp) -> Settings:
         profile=cp.get("contest", "profile").strip() or "auto",
         category=cp.get("contest", "category").strip().upper() or "MS",
         m2_signal_source=cp.get("contest", "m2_signal_source").strip().lower() or "run1run2",
-        db_path=cp.get("n1mm_db", "path").strip().strip('"'),
+        db_path="" if cp.get("n1mm_db", "path").strip().lower() in ("", "auto") else
+        cp.get("n1mm_db", "path").strip().strip('"'),
+        db_follow=cp.get("n1mm_db", "path").strip().lower() == "auto",
+        db_dirs=_list(cp.get("n1mm_db", "folders")),
         db_contest_nr=int(cp.get("n1mm_db", "contest_nr")) if cp.get("n1mm_db", "contest_nr").strip() else None,
         db_poll_s=cp.getfloat("n1mm_db", "poll_seconds"),
         skip_before_start=cp.getboolean("n1mm_db", "skip_before_start"),

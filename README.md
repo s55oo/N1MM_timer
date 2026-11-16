@@ -1,10 +1,13 @@
 # N1MM_timer
 
 Band-change watcher for multi-operator contest stations running **N1MM Logger+**.
-It reads the N1MM contest database directly (read-only) and/or listens to N1MM's
-UDP broadcasts, and checks every logged QSO against the
-2026 CQ WW / CQ WPX band-change rules. It also warns live when a radio sits on
-a band where a QSO *now* would break a rule.
+Run it on **one** PC. It follows the log N1MM has open on that PC (read-only) and
+the N1MM network traffic (UDP, port 12060 by default). It then:
+
+* checks every logged QSO against the 2026 CQ WW / CQ WPX band-change rules;
+* shows a **Stations** overview: every N1MM radio with band, mode, frequency,
+  Run/S&P, TX, which signal it is (RUN/MULT/TX1/TX2) and its band-rule status;
+* warns live when a radio sits on a band where a QSO *now* would break a rule.
 
 Advisory only: it never touches N1MM, the radios or the log.
 See [DESIGN.md](DESIGN.md) for the rules, the data flow and the planned
@@ -21,10 +24,21 @@ PingPong interface.
 1. Python 3.10+ on Windows (tkinter is included in the python.org installer). No extra packages.
 2. `python run_timer.py` starts the window and writes `n1mm_timer.ini` next to it.
 3. In N1MM on **every** networked PC: *Config → Configure Ports, Mode Control, Winkey, etc. →
-   Broadcast Data*. Tick **Contacts**, **Radio** and **App Info**, and add the watcher PC's
-   `IP:12064` to each address (separate several destinations with a space).
-4. In the window, choose **Category** MS or M2 (N1MM doesn't broadcast it). The contest is
-   picked up from N1MM (`profile = auto`), or you can choose it by hand.
+   Broadcast Data*. Tick **Radio**, **Contacts** and **Application Info**, and add the timer PC
+   to each of those lines (several destinations are separated by a space):
+   * on the timer PC itself: `127.0.0.1:12060`
+   * on the other PCs: the timer PC's address, e.g. `192.168.1.10:12060`, or your subnet
+     broadcast, e.g. `192.168.1.255:12060`.
+
+   N1MM sends only to the addresses listed. `127.0.0.1` reaches only programs on the same PC.
+4. The timer follows the log N1MM has open on its PC (`[n1mm_db] path = auto`). Contest and
+   category (ONE/TWO) come from that log's contest setup. Without a database, choose
+   **Category** MS or M2 in the window.
+
+**One port, one program.** Windows hands each N1MM packet on a port to only one program. If
+another program on the timer PC already listens on 12060, the timer says so (red, top of the
+window) instead of silently missing packets. Then give the timer another port
+(`[udp] port = 12064`, several allowed: `12060, 12064`) and add that port to N1MM's lines.
 
 Try it without N1MM:
 
@@ -44,18 +58,38 @@ python run_timer.py --check S50A.cbr                    # Cabrillo instead of th
 
 ## Live sources
 
-* **N1MM database** (recommended on an N1MM PC): *N1MM database…* button or `[n1mm_db] path`
-  in `n1mm_timer.ini`. Polled every 5 s (only re-read when N1MM wrote something). It sees
+* **The open N1MM log** (default, **Follow N1MM log** button / `[n1mm_db] path = auto`). The
+  timer reads which database and contest N1MM has open from N1MM's **Application Info** packet
+  (sent to `127.0.0.1:12060` on the same PC). When you open another log in N1MM, the timer
+  switches to it and starts a fresh ledger. Until an Application Info packet arrives, it uses the
+  log database N1MM wrote to most recently (shown as *guessed*). **N1MM database…** picks a fixed
+  file instead. The database is polled every 5 s (only re-read when N1MM wrote something). It sees
   every QSO, every edit and every delete even if UDP packets were lost, and takes the
   contest and category (ONE/TWO) from N1MM's own contest setup. Opened read-only, never
   written. Run the watcher on a PC where N1MM runs: on an N1MM network every PC has the
   full synchronised log, and SQLite (WAL) must not be read over a network share.
-* **UDP** (for a watcher PC without N1MM, and for live radio warnings, which need
-  RadioInfo packets either way).
+* **UDP from every N1MM PC** (Radio, Contacts, Application Info): live radio positions for the
+  Stations overview and the warnings, and the QSOs if the timer PC has no N1MM database.
 
 Both can run together. QSOs are matched by N1MM's QSO GUID, so nothing is counted twice.
 
 Console only (no window): `python run_timer.py --console`
+
+## Stations overview
+
+One line per N1MM radio (from its Radio packets) plus PCs known only from the log:
+
+| Column | |
+|---|---|
+| Station, R, Op | N1MM StationName, radio number, operator |
+| Band, Mode, Freq, Run/S&P | from N1MM |
+| TX | `TX F1 CQ` while N1MM transmits (only transmissions N1MM starts itself; PTT/paddle aren't reported) |
+| Signal | RUN / MULT (MS) or TX1 / TX2 (M2): from that PC's latest logged QSO |
+| Band rule | `held on 40 m – 3:20`, `free (on 20 m)`, `7/8 changes 14z (TX1) – 1 left`, or the live warning |
+| Last QSO, QSOs, Seen | from the log, and the age of the last Radio packet (`log only` = no Radio packets) |
+
+Faults and warnings show in the timer's own window (red flash + beep for new faults).
+Passing them on to the PingPong lamps comes later (see DESIGN.md, *PingPong interface*).
 
 ## How signals are identified
 
@@ -73,10 +107,10 @@ Check these against real N1MM packets on your network before the contest.
 | File | |
 |---|---|
 | `n1mm_timer/rules.py` | profiles + rule engine (pure, unit-tested) |
+| `n1mm_timer/core.py` | watcher: packets + open log → ledger → rules → faults, warnings, Stations |
 | `n1mm_timer/n1mm.py` | N1MM UDP XML parser + listener |
 | `n1mm_timer/n1mmdb.py` | read-only N1MM `.s3db` reader (DXLOG, ContestInstance) |
 | `n1mm_timer/store.py` | SQLite ledger `timer.db` (survives restarts) |
-| `n1mm_timer/core.py` | watcher: packets → ledger → rules → faults/warnings |
 | `n1mm_timer/cabrillo.py` | Cabrillo reader (`--check`, gap-filling import) |
 | `n1mm_timer/app.py` | Tk window: signal tiles, warnings, faults, acknowledge, flash + beep |
 | `n1mm_timer/pingpong.py` | phase 2: JSON status for PingPong (`[pingpong] enabled = true`) |
