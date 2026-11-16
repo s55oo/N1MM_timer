@@ -108,7 +108,7 @@ class App:
         self.st_tree.tag_configure("stale", foreground=GREY)
         self.st_tree.pack(fill="x", padx=6)
 
-        ttk.Label(r, text="Live warnings (radio band vs. rules – nothing logged yet)", padding=(8, 2)).pack(anchor="w")
+        ttk.Label(r, text="INFO – a radio is on a band where a QSO now would break the rule (nothing logged yet)", padding=(8, 2)).pack(anchor="w")
         self.warn = tk.Listbox(r, height=3, fg=AMBER, font=("Segoe UI", 10, "bold"))
         self.warn.pack(fill="x", padx=6)
 
@@ -253,7 +253,7 @@ class App:
         elif open_faults:
             self.banner.config(text=f"⚠ {len(open_faults)} BAND-CHANGE FAULT(S) – check and acknowledge", bg=RED)
         elif snap.warnings:
-            self.banner.config(text="Careful – a radio is on a band where a QSO now would break the rule", bg=AMBER)
+            self.banner.config(text="INFO – a radio is on a band where a QSO now would break the rule", bg=AMBER)
         else:
             self.banner.config(text="OK – no band-change faults", bg=GREEN)
         if snap.new_faults and self.cp.getboolean("alerts", "sound"):

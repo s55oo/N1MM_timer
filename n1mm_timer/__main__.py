@@ -130,7 +130,7 @@ def console(cp) -> int:
                 last_db = w.db_status
             for st, sig, text in snap.warnings:
                 if last_warn.get(st) != _no_countdown(text):
-                    print(f"[{rules_utcnow():%H:%M:%S}z] warning {st}: {text}")
+                    print(f"[{rules_utcnow():%H:%M:%S}z] INFO {st}: {text}")
             last_warn = {st: _no_countdown(t) for st, _, t in snap.warnings}
             if sender:
                 sender.send(snap)

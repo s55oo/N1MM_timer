@@ -91,8 +91,41 @@ One line per N1MM radio (from its Radio packets) plus PCs known only from the lo
 | Band rule | `held on 40 m – 3:20`, `free (on 20 m)`, `7/8 changes 14z (TX1) – 1 left`, or the live warning |
 | Last QSO, QSOs, Seen | from the log, and the age of the last Radio packet (`log only` = no Radio packets) |
 
-Faults and warnings show in the timer's own window (red flash + beep for new faults).
-Passing them on to the PingPong lamps comes later (see DESIGN.md, *PingPong interface*).
+## At the contest: INFO before, FAULT after
+
+Run the timer on **one** PC. It follows the log N1MM has open there. N1MM keeps that log in
+sync with every networked PC, so the timer sees each QSO from each station within seconds,
+including edits and deletes.
+
+1. **INFO, before a faulty entry.** A radio is on a band where a QSO *now* would break the rule.
+   That station's row in the Stations overview turns red with the reason, and the INFO list
+   below it shows it too, e.g.
+   `RUN radio is on 15 m but RUN is held on 20 m until 14:32:10 (3:20 left). A QSO now = breach.`
+   While N1MM transmits there, it says **possible early TX**. INFO clears on its own when the
+   radio goes back or the time runs out. It makes no sound.
+2. **FAULT, after a faulty entry.** The QSO that broke the rule is logged. It goes into the
+   fault list with every QSO a log checker would remove, e.g.
+   `11 QSOs on 20 m (09:52:39–09:58:58) would be removed`. The window flashes red and beeps
+   until someone clicks **Acknowledge**.
+3. **PingPong, later.** Passing FAULTs to every PingPong lamp on the network is prepared
+   (`[pingpong] enabled = false`, see DESIGN.md *PingPong interface*). It stays off until it
+   is tested. For now everything shows only in the timer's window.
+
+**INFO for the other stations** needs their radio data. Each N1MM sends only its own radio's
+band, so add `<timer PC IP>:12063` (or your subnet broadcast, e.g. `192.168.1.255:12063`) to the
+**Radio** line on every other N1MM PC, and allow N1MM_timer in Windows Firewall (private
+networks). Without that, INFO works only for the timer PC's own radio. FAULTs work for all
+stations either way.
+
+**Local only.** If the timer PC's N1MM is the only sender (`127.0.0.1:12063`), set
+`[udp] bind = 127.0.0.1`. Then nothing from the network can reach the timer, and Windows
+Firewall doesn't ask.
+
+**Test before the contest:**
+1. Open a test log on two networked PCs (e.g. CQ WW CW, category Multi-Single).
+2. Log a RUN QSO on 40 m.
+3. On the other PC, tune to 20 m: the timer shows INFO.
+4. Log a RUN QSO there within 10 minutes: the timer shows a FAULT, flashes and beeps.
 
 ## How signals are identified
 
@@ -123,6 +156,7 @@ This was checked against two real 2026 logs: 9A7A CQ WW SSB Multi-Single (3 ten-
 | `n1mm_timer/app.py` | Tk window: signal tiles, warnings, faults, acknowledge, flash + beep |
 | `n1mm_timer/pingpong.py` | phase 2: JSON status for PingPong (`[pingpong] enabled = true`) |
 | `tools/simulate_n1mm.py` | fake N1MM packets for testing |
+| `CHANGELOG.md` | what changed in each release |
 
 Tests: `python -m unittest discover -s tests -t .`
 
