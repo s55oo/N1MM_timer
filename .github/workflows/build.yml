@@ -1,0 +1,129 @@
+name: build
+
+# Hardened Windows build of N1MM_timer.
+#  * PyInstaller bootloader compiled from source on the runner (not the shared prebuilt one)
+#  * one-folder app, no UPX, VERSIONINFO resource
+#  * optional Authenticode signing (repository secrets, see README "Signed builds")
+#  * Microsoft Defender scan of the output – the job fails if Defender reports a threat
+#  * SHA256SUMS.txt + GitHub build-provenance attestation (verify with `gh attestation verify`)
+# Push a tag vX.Y.Z (must equal n1mm_timer.__version__) to publish a Release.
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write        # create the Release
+  id-token: write        # build-provenance attestation (OIDC)
+  attestations: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      PYI_SPEC: "pyinstaller>=6.11,<7"
+      SIGN_PFX_BASE64: ${{ secrets.SIGN_PFX_BASE64 }}
+      SIGN_PFX_PASSWORD: ${{ secrets.SIGN_PFX_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = python packaging/make_version_file.py --print-version
+          "version=$v" >> $env:GITHUB_OUTPUT
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $tag = $env:GITHUB_REF_NAME.TrimStart('v')
+            if ($tag -ne $v) { throw "Tag v$tag does not match n1mm_timer.__version__ $v" }
+          }
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -t . -v
+
+      - name: Install PyInstaller with bootloader compiled from source
+        shell: pwsh
+        env:
+          PYINSTALLER_COMPILE_BOOTLOADER: "1"
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --no-binary=pyinstaller "$env:PYI_SPEC"
+          python -m PyInstaller --version
+
+      - name: Build (one-folder, no UPX, version resource)
+        run: |
+          python packaging/make_version_file.py
+          python -m PyInstaller --noconfirm --clean --distpath dist --workpath build packaging/N1MM_timer.spec
+
+      - name: Smoke test the frozen exe
+        shell: pwsh
+        run: |
+          & dist\N1MM_timer\N1MM_timer_console.exe --help
+          if ($LASTEXITCODE -ne 0) { throw "--help failed" }
+          & dist\N1MM_timer\N1MM_timer_console.exe --check tests\data\sample_cqww_ms.cbr
+          if ($LASTEXITCODE -ne 1) { throw "expected 2 faults (exit 1), got exit $LASTEXITCODE" }
+
+      - name: Authenticode signing (only if SIGN_PFX_BASE64 secret is set)
+        if: env.SIGN_PFX_BASE64 != ''
+        shell: pwsh
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'sign.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGN_PFX_BASE64))
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
+                      Sort-Object FullName -Descending | Select-Object -First 1
+          $exes = Get-ChildItem dist\N1MM_timer\*.exe
+          & $signtool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
+              /f $pfx /p $env:SIGN_PFX_PASSWORD $exes.FullName
+          if ($LASTEXITCODE -ne 0) { throw "signing failed" }
+          & $signtool.FullName verify /pa $exes.FullName
+          if ($LASTEXITCODE -ne 0) { throw "signature verification failed" }
+          Remove-Item $pfx
+
+      - name: Microsoft Defender scan
+        shell: pwsh
+        run: |
+          $mp = "$env:ProgramFiles\Windows Defender\MpCmdRun.exe"
+          if (-not (Test-Path $mp)) { Write-Warning "Defender not available on runner – scan skipped"; exit 0 }
+          try { Update-MpSignature -ErrorAction Stop } catch { Write-Warning "Signature update failed: $_" }
+          & $mp -Scan -ScanType 3 -File "$PWD\dist\N1MM_timer" -DisableRemediation
+          switch ($LASTEXITCODE) {
+            0 { Write-Host "Defender: no threats found" }
+            2 { throw "Defender reported a threat in the build output – not publishing" }
+            default { Write-Warning "Defender scan could not run on this runner (exit $LASTEXITCODE)" }
+          }
+
+      - name: Package and hash
+        shell: pwsh
+        run: ./packaging/package.ps1 -Version "${{ steps.ver.outputs.version }}"
+
+      - name: Build provenance attestation
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/N1MM_timer-${{ steps.ver.outputs.version }}-win64.zip
+            dist/N1MM_timer/N1MM_timer.exe
+            dist/N1MM_timer/N1MM_timer_console.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: N1MM_timer-${{ steps.ver.outputs.version }}-win64
+          path: |
+            dist/N1MM_timer-${{ steps.ver.outputs.version }}-win64.zip
+            dist/SHA256SUMS.txt
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/N1MM_timer-${{ steps.ver.outputs.version }}-win64.zip
+            dist/SHA256SUMS.txt
+          generate_release_notes: true

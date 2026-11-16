@@ -1,0 +1,119 @@
+"""n1mm_timer.ini handling."""
+from __future__ import annotations
+
+import configparser
+import os
+import sys
+
+from .core import Settings
+
+DEFAULT_INI = """\
+; N1MM_timer configuration
+[udp]
+; N1MM: Config > Configure Ports > Broadcast Data – add <this-pc-ip>:12064 to Contacts and Radio
+port = 12064
+bind = 0.0.0.0
+; optional comma-separated source IP allow list (empty = accept all)
+allowed_ips =
+; optional comma-separated N1MM StationName allow list (empty = accept all)
+station_names =
+
+[contest]
+; auto = take contest from N1MM (CQWWCW, CQWPXSSB, ...) or one of:
+; CQWW-CW-MS CQWW-SSB-MS CQWW-RTTY-MS CQWW-CW-M2 CQWW-SSB-M2 CQWW-RTTY-M2
+; CQWPX-CW-MS CQWPX-SSB-MS CQWPX-RTTY-MS CQWPX-CW-M2 CQWPX-SSB-M2 CQWPX-RTTY-M2
+profile = auto
+; MS or M2 (used with profile = auto when no N1MM database is set –
+; with a database, N1MM's own TransmitterCategory ONE/TWO is used)
+category = MS
+; M2 only – how to tell TX1 from TX2:
+;   run1run2 = N1MM Run1/Run2 field (what N1MM writes as Cabrillo TX id; several PCs may share a TX)
+;   station  = one N1MM PC (StationName / NetBiosName) per TX
+;   radionr  = N1MM RadioNr
+m2_signal_source = run1run2
+
+[n1mm_db]
+; N1MM contest database to read directly, e.g.
+; C:\\Users\\<you>\\Documents\\N1MM Logger+\\Databases\\S50A_CQWWCW_2026.s3db
+; Read-only. Use it on a PC where N1MM runs (not over a network share).
+path =
+; ContestNR inside the database (empty = most recent contest that has QSOs)
+contest_nr =
+poll_seconds = 5
+; ignore QSOs outside the contest's StartDate .. +48 h (test QSOs before the start)
+skip_before_start = true
+
+[alerts]
+sound = true
+
+[pingpong]
+; phase 2 – JSON status datagrams for PingPong (see DESIGN.md)
+enabled = false
+host = 127.0.0.1
+port = 12065
+"""
+
+
+def _writable(d: str) -> bool:
+    try:
+        probe = os.path.join(d, ".n1mm_timer_write_test")
+        with open(probe, "w"):
+            pass
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
+def app_dir() -> str:
+    """Where n1mm_timer.ini and timer.db live: next to the exe (portable use), or
+    %LOCALAPPDATA%\\N1MM_timer when that folder is read-only (e.g. under Program Files),
+    so the program never needs administrator rights."""
+    if getattr(sys, "frozen", False):
+        d = os.path.dirname(sys.executable)
+    else:
+        d = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _writable(d):
+        return d
+    alt = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "N1MM_timer")
+    os.makedirs(alt, exist_ok=True)
+    return alt
+
+
+def load(path: str = None) -> configparser.ConfigParser:
+    path = path or os.path.join(app_dir(), "n1mm_timer.ini")
+    cp = configparser.ConfigParser()
+    cp.read_string(DEFAULT_INI)
+    if os.path.exists(path):
+        cp.read(path, encoding="utf-8")
+    else:
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(DEFAULT_INI)
+        except OSError:
+            pass
+    cp.path = path
+    return cp
+
+
+def _list(v: str) -> list:
+    return [x.strip() for x in (v or "").split(",") if x.strip()]
+
+
+def settings(cp) -> Settings:
+    return Settings(
+        profile=cp.get("contest", "profile").strip() or "auto",
+        category=cp.get("contest", "category").strip().upper() or "MS",
+        m2_signal_source=cp.get("contest", "m2_signal_source").strip().lower() or "run1run2",
+        db_path=cp.get("n1mm_db", "path").strip().strip('"'),
+        db_contest_nr=int(cp.get("n1mm_db", "contest_nr")) if cp.get("n1mm_db", "contest_nr").strip() else None,
+        db_poll_s=cp.getfloat("n1mm_db", "poll_seconds"),
+        skip_before_start=cp.getboolean("n1mm_db", "skip_before_start"),
+        allowed_ips=_list(cp.get("udp", "allowed_ips")),
+        station_names=_list(cp.get("udp", "station_names")),
+    )
+
+
+def save(cp):
+    with open(cp.path, "w", encoding="utf-8") as fh:
+        cp.write(fh)

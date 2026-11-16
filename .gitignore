@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+build/
+dist/
+/*.spec
+timer.db
+n1mm_timer.ini
+packaging/version_info.txt
+.venv-build/
