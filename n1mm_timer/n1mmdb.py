@@ -32,10 +32,24 @@ class ContestInfo:
     transmitter: str          # ONE / TWO / UNLIMITED / ...
     operator: str
     qsos: int
+    station_category: str = ""
 
     @property
     def category(self) -> Optional[str]:
         return CATEGORY.get((self.transmitter or "").upper())
+
+    @property
+    def cqww_category(self):
+        op = (self.operator or "").strip().upper()
+        tx = (self.transmitter or "").strip().upper()
+        if op in ("SINGLE-OP", "SINGLE-OP-ASSISTED", "CHECKLOG") or (op == "MULTI-OP" and
+                (self.station_category or "").strip().upper() == "DISTRIBUTED"):
+            return "activity"
+        if op == "MULTI-ONE" and tx == "ONE":
+            return "MS"
+        if op == "MULTI-OP":
+            return {"ONE": "MS", "TWO": "M2", "UNLIMITED": "activity"}.get(tx, "unknown")
+        return "unknown"
 
     def label(self) -> str:
         st = f"{self.start:%Y-%m-%d}" if self.start else "?"
@@ -72,7 +86,8 @@ def contests(db: sqlite3.Connection) -> list:
         keys = r.keys()
         out.append(ContestInfo(nr, r["ContestName"] or "", _dt(r["StartDate"]),
                                r["TransmitterCategory"] if "TransmitterCategory" in keys else "",
-                               r["OperatorCategory"] or "", counts.get(nr, 0)))
+                               r["OperatorCategory"] or "", counts.get(nr, 0),
+                               r["StationCategory"] if "StationCategory" in keys else ""))
     return out
 
 

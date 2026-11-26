@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from . import cabrillo, n1mm, n1mmdb, rules
+from . import cabrillo, lampstatus, n1mm, n1mmdb, rules
 from .n1mm import Contact
 from .store import Store, row_ts
 from .rules import utcnow as rules_utcnow
@@ -68,6 +68,7 @@ class Snapshot:
     qso_count: int
     errors: list
     stations: list = field(default_factory=list)   # list[StationRow]
+    lamp_state: Optional[dict] = None
 
 
 class Watcher:
@@ -88,6 +89,9 @@ class Watcher:
         self._db = None
         self._db_seen: dict = {}        # id -> row signature from last sync
         self._db_version = None
+        self._lamp_state = None
+        self._lamp_checked = 0.0
+        self._missing_open_log = False
         self.follow_source = ""          # "N1MM App Info" | "guessed: newest log" | ""
         self._local_ips = self._my_ips()
         self._local_ips_t = time.monotonic()
@@ -104,6 +108,8 @@ class Watcher:
         s = self.settings
         if s.profile and s.profile != "auto":
             return rules.PROFILES.get(s.profile)
+        if self.db_info and lampstatus.cqww(self.db_info.name):
+            return rules.profile_for_contest(self.db_info.name, self.db_info.cqww_category)
         cat = (self.db_info.category if self.db_info and self.db_info.category else None) or s.category
         return rules.profile_for_contest(self.contest_name, cat)
 
@@ -189,8 +195,10 @@ class Watcher:
         path = n1mmdb.resolve_dbname(dbname, self.settings.db_dirs)
         if path is None:
             if dbname:
+                self._missing_open_log = True
                 self.db_status = f"N1MM has {dbname!r} open but it is not found on this PC"
             return False
+        self._missing_open_log = False
         nr = int(contestnr) if str(contestnr).strip().isdigit() else None
         s = self.settings
         same = os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(s.db_path or "")) \
@@ -205,7 +213,10 @@ class Watcher:
                 self.store.clear_qsos()
                 self.seen_faults = set(self.store.acked())
             s.db_path, s.db_contest_nr = path, nr
+            if self._db is not None:
+                self._db.close()
             self._db, self.db_info, self._db_seen, self._db_version = None, None, {}, None
+            self._lamp_checked = 0.0
             self.follow_source = source
             self.store.set_meta("followed_db", path)
             self.store.set_meta("followed_contestnr", "" if nr is None else str(nr))
@@ -257,8 +268,16 @@ class Watcher:
                         warnings.append((f"{station} R{radionr}", sig, w))
             age = None if self.last_packet is None else time.monotonic() - self.last_packet
             stations = self._stations(prof, res, q if prof is not None else [], warnings, now)
+            state = self._lamp_state
+            if (self.db_info is None or not self._lamp_checked or
+                    (self.settings.db_follow and self._missing_open_log) or
+                    time.monotonic() - self._lamp_checked > max(10, 2 * self.settings.db_poll_s)):
+                waiting_for_log = not self.contest_name and (self.settings.db_path or self.settings.db_follow)
+                state = None
+                if waiting_for_log or lampstatus.cqww(self.contest_name):
+                    state = {"category": "unknown", "signals": {}, "last": {}}
             return Snapshot(prof, self.contest_name, now, res, faults, new, warnings,
-                            self.packets, age, qcount, list(self.errors), stations)
+                            self.packets, age, qcount, list(self.errors), stations, state)
 
     def _radio_signal(self, prof, station, radionr, fields, qsos) -> str:
         """Which signal is this radio? The signal of this PC's latest logged QSO (N1MM's
@@ -323,55 +342,84 @@ class Watcher:
         return sorted(rows.values(), key=lambda r: (r.signal or "~", r.station, r.radionr))
 
     # ---- N1MM database ------------------------------------------------------
-    def sync_db(self) -> str:
+    def select_db(self, path="", nr=None):
+        with self.lock:
+            self.settings.db_follow = not path
+            if self.settings.db_path != path or self.settings.db_contest_nr != nr:
+                self.store.clear_qsos()
+                self.seen_faults = set(self.store.acked())
+            self.settings.db_path, self.settings.db_contest_nr = path, nr
+            if self._db is not None:
+                self._db.close()
+            self._db, self.db_info, self._db_seen, self._db_version = None, None, {}, None
+            self._missing_open_log = False
+            self.follow_source = ""
+
+    def sync_db(self, now=None) -> str:
+        with self.lock:
+            return self._sync_db(now or rules_utcnow())
+
+    def _sync_db(self, now) -> str:
         """Bring the ledger in line with the N1MM database (adds, edits, deletes)."""
         s = self.settings
-        if s.db_follow and (not s.db_path or self.follow_source.startswith("guessed")):
+        if s.db_follow and not self._missing_open_log and (not s.db_path or self.follow_source.startswith("guessed")):
             guess = n1mmdb.newest_log(s.db_dirs)          # until N1MM's App Info tells us
             if guess:
                 self._follow(guess, "", "guessed: newest log")
         if not s.db_path:
             return ""
         try:
+            if not os.path.isfile(s.db_path):
+                raise FileNotFoundError(s.db_path)
             if self._db is None:
                 self._db = n1mmdb.connect(s.db_path)
                 self._db_version = None
             ver = self._db.execute("PRAGMA data_version").fetchone()[0]
-            if ver == self._db_version and self.db_info is not None:
+            version = (ver, lampstatus.epoch(now) // 3600, s.db_contest_nr, s.signal_source, tuple(sorted(s.signal_map.items())))
+            if version == self._db_version and self.db_info is not None:
+                self._lamp_checked = time.monotonic()
                 return self.db_status          # N1MM wrote nothing since last poll
             info = n1mmdb.pick_contest(self._db, s.db_contest_nr)
             if info is None:
+                self._lamp_checked = 0.0
                 self.db_status = "no contest in database"
                 return self.db_status
-            contacts, deleted, skipped = n1mmdb.read_qsos(self._db, info, s.skip_before_start)
+            db = self._db
+            contacts, deleted, skipped = n1mmdb.read_qsos(db, info, s.skip_before_start)
+            if self._db is not db:
+                return self.db_status
         except Exception as e:          # locked, missing, wrong file ...
+            self._lamp_checked = 0.0
+            if self._db is not None:
+                self._db.close()
             self._db = None
             self.db_status = f"database error: {e}"
             return self.db_status
         changed = False
-        with self.lock:
-            if self.db_info is None or self.db_info.nr != info.nr or self.db_info.category != info.category:
+        if self.db_info is None or self.db_info.nr != info.nr or self.db_info.category != info.category:
+            changed = True
+        self._lamp_state = lampstatus.derive(info, contacts, self, now, skipped)
+        self._lamp_checked = time.monotonic()
+        self.db_info = info
+        self._set_contest(info.name)
+        now_ids = set()
+        for c in contacts:
+            now_ids.add(c.id)
+            sig = (c.ts, c.band, c.call, c.station, c.run1run2, c.radionr, c.is_run, c.is_mult)
+            if self._db_seen.get(c.id) != sig:
+                self.store.upsert(c, source="db", commit=False)
+                self._db_seen[c.id] = sig
                 changed = True
-            self.db_info = info
-            self._set_contest(info.name)
-            now_ids = set()
-            for c in contacts:
-                now_ids.add(c.id)
-                sig = (c.ts, c.band, c.call, c.station, c.run1run2, c.radionr, c.is_run, c.is_mult)
-                if self._db_seen.get(c.id) != sig:
-                    self.store.upsert(c, source="db", commit=False)
-                    self._db_seen[c.id] = sig
-                    changed = True
-            gone = (set(self._db_seen) - now_ids) | (set(deleted) & set(self._db_seen))
-            for qid in gone:
-                self.store.delete(qid, commit=False)
-                self._db_seen.pop(qid, None)
+        gone = (set(self._db_seen) - now_ids) | (set(deleted) & set(self._db_seen))
+        for qid in gone:
+            self.store.delete(qid, commit=False)
+            self._db_seen.pop(qid, None)
+            changed = True
+        for qid in deleted:          # deleted in N1MM before we saw it via UDP
+            if self.store.delete(qid, commit=False):
                 changed = True
-            for qid in deleted:          # deleted in N1MM before we saw it via UDP
-                if self.store.delete(qid, commit=False):
-                    changed = True
-            self.store.commit()
-        self._db_version = ver
+        self.store.commit()
+        self._db_version = version
         if changed:
             self.dirty.set()
         extra = f", {skipped} outside contest period ignored" if skipped else ""

@@ -175,11 +175,7 @@ class App:
             nr = tk.simpledialog.askinteger("Contest", f"Contests in this database:\n{txt}\n\nContestNR to watch:",
                                             initialvalue=pick.nr, parent=self.root)
             pick = next((c for c in with_q if c.nr == nr), pick)
-        s = self.watcher.settings
-        s.db_follow = False
-        self.watcher.follow_source = ""
-        s.db_path, s.db_contest_nr = p, pick.nr
-        self.watcher._db, self.watcher.db_info, self.watcher._db_seen, self.watcher._db_version = None, None, {}, None
+        self.watcher.select_db(p, pick.nr)
         self.cp.set("n1mm_db", "path", p)
         self.cp.set("n1mm_db", "contest_nr", str(pick.nr))
         try:
@@ -193,10 +189,7 @@ class App:
 
     def follow_db(self):
         """Follow whatever log N1MM has open on this PC (App Info packet, else newest log)."""
-        s = self.watcher.settings
-        s.db_follow, s.db_path, s.db_contest_nr = True, "", None
-        self.watcher.follow_source = ""
-        self.watcher._db, self.watcher.db_info, self.watcher._db_seen, self.watcher._db_version = None, None, {}, None
+        self.watcher.select_db()
         self.cp.set("n1mm_db", "path", "auto")
         self.cp.set("n1mm_db", "contest_nr", "")
         try:
@@ -250,7 +243,9 @@ class App:
         self.l_db.config(text=dbtxt)
         open_faults = [f for f, a in snap.faults if not a]
         self.open_faults = len(open_faults)
-        if prof is None:
+        if prof is None and snap.lamp_state and snap.lamp_state["category"] == "activity":
+            self.banner.config(text="CQ WW – no band-change limit for this category", bg=GREY)
+        elif prof is None:
             self.banner.config(text="Pick a profile (or start N1MM with a CQ WW / WPX contest)", bg=GREY)
         elif open_faults:
             self.banner.config(text=f"⚠ {len(open_faults)} BAND-CHANGE FAULT(S) – check and acknowledge", bg=RED)

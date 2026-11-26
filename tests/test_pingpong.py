@@ -5,6 +5,7 @@ import json
 import socket
 import time
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta
 
 from n1mm_timer import pingpong, rules
@@ -103,13 +104,23 @@ class TestSender(unittest.TestCase):
         s = pingpong.Sender("127.0.0.1", rx.getsockname()[1])
         w = Watcher(Store(":memory:"), Settings(category="MS"))
         try:
+            clock_patch = patch("n1mm_timer.pingpong.time.monotonic", return_value=100)
+            clock = clock_patch.start()
+            self.addCleanup(clock_patch.stop)
             self.assertTrue(s.tick(w.snapshot(NOW)))                         # first: send
             self.assertFalse(s.tick(w.snapshot(NOW + timedelta(seconds=1))))  # nothing new
-            self.assertTrue(s.tick(w.snapshot(NOW + timedelta(seconds=2))))   # heartbeat
+            clock.return_value += 2
+            self.assertTrue(s.tick(w.snapshot(NOW - timedelta(minutes=5))))   # heartbeat
             w.handle_packet(contact("a", "2026-11-28 12:00:00", "7", "K1AR"))
             w.handle_packet(contact("b", "2026-11-28 12:03:00", "14", "W1AW"))
             self.assertTrue(s.tick(w.snapshot(NOW + timedelta(seconds=2.5))))  # change: at once
-            got = [json.loads(rx.recvfrom(2000)[0]) for _ in range(3)]
+            got = []
+            for i in range(3):
+                got.append(json.loads(rx.recv(2000)))
+                packet = rx.recv(2000)
+                self.assertTrue(packet.startswith(b"PPS1"))
+                if i == 0:
+                    self.assertIsNone(json.loads(packet[4:])["state"])
             self.assertEqual([m["seq"] for m in got], [1, 2, 3])
             self.assertEqual([m["status"] for m in got], ["ok", "ok", "violation"])
             a = pp.BandAlert()

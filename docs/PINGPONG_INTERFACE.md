@@ -76,3 +76,26 @@ the oldest violations first.
 Acknowledging stays in N1MM_timer. An acknowledged fault leaves `violations`, so it disappears
 from every PingPong screen within 2 s. A later v2 may add an ack message from PingPong back to
 the timer.
+
+### CQ WW DX operating state
+
+Alongside the v1 alert, the timer sends a separate UDP datagram starting with
+the four ASCII bytes `PPS1`, followed by UTF-8 JSON. The master relays the
+same payload through PingPong's signed discovery transport. This keeps the
+existing alert size limit and violation list independent of station activity.
+
+The envelope carries `v:1`, timer `instance`, `seq`, UTC epoch seconds
+`sent`, lifetime `ttl` in seconds and a complete `state`. A null state
+clears the previous contest. State has a category (MS, M2, activity or
+unknown), a map of uppercase station names to last-QSO epoch seconds
+(`last`), and `signals`. Each expected signal has a null value until
+its first QSO. MS rows have a band in metres and an absolute `until`
+deadline calculated in Cabrillo minutes. M2 rows have a band and `used`
+changes for the master's current UTC epoch `hour`. Lamps wait for a fresh
+snapshot on rollover. A populated log with all QSOs outside its configured
+contest dates reports unknown with reason `contest_dates`.
+
+The snapshot comes from the active local N1MM database, including corrections
+and deletions. UDP alone cannot establish a complete contest history. When
+the timer knows CQ WW is active but cannot verify the history or category it
+publishes unknown. Clients expire the state when heartbeats stop.

@@ -9,10 +9,11 @@ here removes it from every PingPong screen. See docs/PINGPONG_INTERFACE.md.
 """
 from __future__ import annotations
 
+import calendar
 import json
 import socket
 import uuid
-from datetime import timedelta
+import time
 from typing import Optional
 
 from . import rules
@@ -91,6 +92,7 @@ class Sender:
         self.seq = 0
         self.sent = 0
         self.error: Optional[str] = None
+        self._last_state = None
         self._last_key = None
         self._last_sent = None
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -102,11 +104,13 @@ class Sender:
     def tick(self, snap, force: bool = False) -> bool:
         """Send if something changed or the heartbeat is due. True if sent."""
         key = tuple((f.id, len(f.affected)) for f in open_violations(snap)[:MAX_VIOLATIONS])
-        due = self._last_sent is None or (snap.now - self._last_sent) >= timedelta(seconds=HEARTBEAT_S)
-        if not (force or due or key != self._last_key):
+        now = time.monotonic()
+        due = self._last_sent is None or now - self._last_sent >= HEARTBEAT_S
+        if not (force or due or key != self._last_key or snap.lamp_state != self._last_state):
             return False
+        self._last_state = snap.lamp_state
         self._last_key = key
-        self._last_sent = snap.now
+        self._last_sent = now
         return self.send(snap)
 
     def send(self, snap) -> bool:
@@ -114,6 +118,10 @@ class Sender:
         data = encode(message(snap, self.instance, self.seq, self.ttl_s))
         try:
             self.sock.sendto(data, self.addr)
+            status = {"v": 1, "instance": self.instance, "seq": self.seq,
+                      "sent": calendar.timegm(snap.now.utctimetuple()), "ttl": self.ttl_s,
+                      "state": snap.lamp_state}
+            self.sock.sendto(b"PPS1" + encode(status), self.addr)
             self.sent += 1
             self.error = None
             return True
