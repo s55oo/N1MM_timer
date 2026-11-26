@@ -110,18 +110,19 @@ def _flag(v) -> Optional[bool]:
 
 
 def read_qsos(db: sqlite3.Connection, info: ContestInfo, skip_before_start: bool = True):
-    """Return (contacts, deleted_ids, skipped_pre_start)."""
+    """Return (contacts, deleted_ids, skipped_outside_period, unreadable_rows)."""
     rows = db.execute("SELECT * FROM DXLOG WHERE ContestNR=?", (info.nr,)).fetchall()
     deleted = [r["ID"] for r in db.execute("SELECT ID FROM DXLOG WHERE ContestNR=-1") if r["ID"]]
-    out, skipped = [], 0
+    out, skipped, unreadable = [], 0, 0
     start = info.start if (skip_before_start and info.start and info.start.year > 1900) else None
     end = start + timedelta(hours=48) if start else None
     for r in rows:
         ts = _dt(r["TS"])
-        if ts is None or not r["ID"]:
-            continue
-        if start and not (start <= ts < end):
+        if start and ts is not None and not (start <= ts < end):
             skipped += 1
+            continue
+        if ts is None or not str(r["ID"] or "").strip():
+            unreadable += 1
             continue
         b = r["Band"]
         band = band_from_n1mm(f"{b:g}" if isinstance(b, (int, float)) else str(b or ""))
@@ -139,7 +140,7 @@ def read_qsos(db: sqlite3.Connection, info: ContestInfo, skip_before_start: bool
             run1run2=str(r["Run1Run2"] if r["Run1Run2"] is not None else ""),
             is_run=_flag(r["IsRunQSO"]), is_mult=(any(known) if known else None),
             contest=info.name, operator=r["Operator"] or ""))
-    return out, deleted, skipped
+    return out, deleted, skipped, unreadable
 
 
 # ---- following the log N1MM has open on this PC ---------------------------------------

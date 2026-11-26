@@ -97,3 +97,44 @@ class LampStateTest(unittest.TestCase):
         self.assertIsNone(self.w.db_info)
         self.assertEqual(len(self.w.store.rows()), 0)
         self.assertIsNone(self.state())
+
+    def test_incomplete_and_off_band_contacts(self):
+        for qid, ts, band, reason in [
+                ("", "2026-11-28 14:00:00", 14, "incomplete_log"),
+                ("q", "invalid", 14, "incomplete_log"),
+                ("q", "2026-11-28 14:00:00", 10, "invalid_band")]:
+            with self.subTest(reason=reason, ts=ts):
+                self.db.execute("DELETE FROM DXLOG")
+                qso(self.db, qid, ts, band, "C1")
+                self.assertEqual(self.state()["reason"], reason)
+
+    def test_tied_bands_warn_only_affected_signal_and_hour(self):
+        self.db.execute("UPDATE ContestInstance SET TransmitterCategory='TWO' WHERE ContestNR=1")
+        qso(self.db, "1", "2026-11-28 14:58:00", 14, "C1")
+        qso(self.db, "2", "2026-11-28 14:58:00", 21, "C2")
+        qso(self.db, "3", "2026-11-28 14:59:00", 7, "C3", r12=2)
+        state = self.state()
+        self.assertEqual(state["signals"]["TX1"], {"reason": "qso_order"})
+        self.assertEqual(state["signals"]["TX2"], {"band": "40", "used": 0})
+        qso(self.db, "4", "2026-11-28 15:01:00", 7, "C4")
+        self.assertEqual(self.state(datetime(2026, 11, 28, 15, 2))["signals"]["TX1"],
+                         {"band": "40", "used": 1})
+
+    def test_picker_can_select_empty_current_contest_or_cancel(self):
+        try:
+            from n1mm_timer.app import App
+        except ImportError as exc:
+            if "tkinter" in str(exc):
+                self.skipTest("Tk unavailable")
+            raise
+        from unittest.mock import Mock
+        qso(self.db, "1", "2026-11-28 14:00:00", 14, "C1")
+        app = Mock()
+        with patch("n1mm_timer.app.filedialog.askopenfilename", return_value=self.w.settings.db_path), \
+                patch("n1mm_timer.app.tk.simpledialog.askinteger", side_effect=[None, 2]) as choose, \
+                patch("n1mm_timer.app.config.save"):
+            App.choose_db(app)
+            app.watcher.select_db.assert_not_called()
+            App.choose_db(app)
+            app.watcher.select_db.assert_called_once_with(self.w.settings.db_path, 2)
+            self.assertIn("#2", choose.call_args.args[1])

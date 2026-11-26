@@ -99,3 +99,10 @@ The snapshot comes from the active local N1MM database, including corrections
 and deletions. UDP alone cannot establish a complete contest history. When
 the timer knows CQ WW is active but cannot verify the history or category it
 publishes unknown. Clients expire the state when heartbeats stop.
+
+PingPong v1.118 projects the master's send time using monotonic elapsed time
+since receipt. Each new snapshot re-anchors the estimate. For Multi-Two, a
+signal row of `{"reason":"qso_order"}` means different bands share a logged
+second and the band or count cannot be confirmed. The other signal is still
+reported. The unknown-state reasons `incomplete_log` and `invalid_band`
+identify unusable timestamps/IDs and QSOs outside the six CQ WW DX bands.

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+- Send CQ WW DX activity, band timers and hourly change counts to PingPong v1.118.
+- Include empty contest instances in the database picker. Flag incomplete log rows, invalid bands and ambiguous band order on the lamps.
+
 ## 0.3.0 – 2026-11-16
 - **BAND VIOLATION on every PingPong screen** (PingPong v1.117+). Unacknowledged faults go to
   the PingPong lamp on the same PC (UDP 127.0.0.1:46071, interface v1), every 2 s and at once

@@ -45,7 +45,19 @@ jobs:
             if ($tag -ne $v) { throw "Tag v$tag does not match n1mm_timer.__version__ $v" }
           }
 
+      - name: Check out PingPong receiver for wire compatibility
+        uses: actions/checkout@v5
+        with:
+          repository: s55oo/N1MMPingPong
+          ref: 3f55c4c7cd681c3ffdf54bd8d7ba8c35029b2388
+          path: .compat/pingpong
+          sparse-checkout: pingpong_contest.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Unit tests
+        env:
+          PINGPONG_SOURCE: .compat/pingpong
         run: python -m unittest discover -s tests -t . -v
 
       - name: PyInstaller with bootloader compiled from source (verified)

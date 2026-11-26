@@ -1,6 +1,7 @@
 """Tk window for N1MM_timer."""
 from __future__ import annotations
 
+from contextlib import closing
 import os
 import sys
 import tkinter as tk
@@ -161,20 +162,25 @@ class App:
             return
         from . import n1mmdb
         try:
-            cs = [c for c in n1mmdb.contests(n1mmdb.connect(p))]
+            with closing(n1mmdb.connect(p)) as db:
+                contests = n1mmdb.contests(db)
         except Exception as e:
             messagebox.showerror("N1MM database", f"Cannot read {p}:\n{e}")
             return
-        with_q = [c for c in cs if c.qsos] or cs
-        if not with_q:
+        if not contests:
             messagebox.showerror("N1MM database", "No contest found in this database.")
             return
-        pick = with_q[-1]
-        if len(with_q) > 1:
-            txt = "\n".join(c.label() for c in with_q)
+        pick = contests[-1]
+        if len(contests) > 1:
+            txt = "\n".join(c.label() for c in contests)
             nr = tk.simpledialog.askinteger("Contest", f"Contests in this database:\n{txt}\n\nContestNR to watch:",
                                             initialvalue=pick.nr, parent=self.root)
-            pick = next((c for c in with_q if c.nr == nr), pick)
+            if nr is None:
+                return
+            pick = next((c for c in contests if c.nr == nr), None)
+            if pick is None:
+                messagebox.showerror("N1MM database", "Choose a listed ContestNR.")
+                return
         self.watcher.select_db(p, pick.nr)
         self.cp.set("n1mm_db", "path", p)
         self.cp.set("n1mm_db", "contest_nr", str(pick.nr))

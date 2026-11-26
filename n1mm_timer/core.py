@@ -385,7 +385,7 @@ class Watcher:
                 self.db_status = "no contest in database"
                 return self.db_status
             db = self._db
-            contacts, deleted, skipped = n1mmdb.read_qsos(db, info, s.skip_before_start)
+            contacts, deleted, skipped, unreadable = n1mmdb.read_qsos(db, info, s.skip_before_start)
             if self._db is not db:
                 return self.db_status
         except Exception as e:          # locked, missing, wrong file ...
@@ -398,7 +398,7 @@ class Watcher:
         changed = False
         if self.db_info is None or self.db_info.nr != info.nr or self.db_info.category != info.category:
             changed = True
-        self._lamp_state = lampstatus.derive(info, contacts, self, now, skipped)
+        self._lamp_state = lampstatus.derive(info, contacts, self, now, skipped, unreadable)
         self._lamp_checked = time.monotonic()
         self.db_info = info
         self._set_contest(info.name)
@@ -423,6 +423,8 @@ class Watcher:
         if changed:
             self.dirty.set()
         extra = f", {skipped} outside contest period ignored" if skipped else ""
+        if unreadable:
+            extra += f", {unreadable} QSOs missing a timestamp or ID"
         how = f" – following N1MM ({self.follow_source})" if s.db_follow and self.follow_source else ""
         self.db_status = f"DB {os.path.basename(s.db_path)} {info.label()}{extra}{how}"
         return self.db_status

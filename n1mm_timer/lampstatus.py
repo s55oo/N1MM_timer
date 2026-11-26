@@ -1,6 +1,7 @@
 """CQ WW DX lamp snapshot from the selected, synchronized N1MM contest instance."""
 import calendar
 from datetime import timedelta
+from itertools import groupby
 
 from . import rules
 
@@ -14,10 +15,29 @@ def epoch(ts):
     return calendar.timegm(ts.utctimetuple())
 
 
-def derive(info, contacts, watcher, now, skipped):
+def ambiguous_hour(qsos, hour):
+    """Band at entry into the hour and band sequence within it must be known."""
+    ambiguous = set()
+    previous = {}
+    for (signal, ts), group in groupby(sorted(qsos, key=lambda q: (q.signal, q.ts)),
+                                       key=lambda q: (q.signal, q.ts)):
+        bands = {q.band for q in group}
+        prior = previous.get(signal, set())
+        if epoch(ts) // 3600 == hour:
+            if len(bands) > 1 or (len(prior) > 1 and bands & prior):
+                ambiguous.add(signal)
+        previous[signal] = bands
+    return ambiguous | {signal for signal, bands in previous.items() if len(bands) > 1}
+
+
+def derive(info, contacts, watcher, now, skipped, unreadable=0):
     if not cqww(info.name):
         return None
     category = info.cqww_category
+    if unreadable:
+        return {"category": "unknown", "last": {}, "signals": {}, "reason": "incomplete_log"}
+    if any(c.band not in ("160", "80", "40", "20", "15", "10") for c in contacts):
+        return {"category": "unknown", "last": {}, "signals": {}, "reason": "invalid_band"}
     if skipped and not contacts:
         return {"category": "unknown", "last": {}, "signals": {}, "reason": "contest_dates"}
     hour = epoch(now) // 3600
@@ -45,7 +65,11 @@ def derive(info, contacts, watcher, now, skipped):
             return state
         qsos.append(rules.Qso(c.id, c.ts, c.band, signal))
     result = rules.evaluate(profile, qsos, now=now)
+    ambiguous = ambiguous_hour(qsos, hour) if category == "M2" else set()
     for name in names:
+        if name in ambiguous:
+            state["signals"][name] = {"reason": "qso_order"}
+            continue
         s = result.status.get(name)
         row = None
         if s is not None:

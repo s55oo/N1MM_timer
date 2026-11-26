@@ -52,7 +52,7 @@ class TestN1mmDb(unittest.TestCase):
         qso(self.db, "d", "2026-11-28 00:03:00", 0, "W1AW", freq=21025.0)       # band missing -> from Freq kHz
         db = n1mmdb.connect(self.path)
         info = n1mmdb.pick_contest(db, 1)
-        cs, deleted, skipped = n1mmdb.read_qsos(db, info)
+        cs, deleted, skipped, unreadable = n1mmdb.read_qsos(db, info)
         self.assertEqual(skipped, 1)
         by = {c.id: c for c in cs}
         self.assertEqual((by["b"].band, by["b"].is_run, by["b"].station), ("40", True, "RUN"))
